@@ -1,0 +1,716 @@
+# Rewrite Guide (Python + asyncio)
+
+> This document consolidates the rewrite guidance into a single, beginner-friendly place.
+>
+> Included:
+> - Spec-style guide (what to build)
+> - Blueprint-style guide (how to structure code)
+> - Engineering guide (WS background services + SQLite audit store)
+> - Lighter WebSocket protocol notes (order_book + ticker + user_stats)
+> - Appendix: M0/M1 minimal runnable demo (copy-paste)
+>
+---
+
+## Part A — Spec 风格：重写指南（需求规格/架构说明）
+
+### 1. 范围与非目标
+#### 1.1 范围（必须覆盖）
+- 两交易所（EdgeX、Lighter）之间对同一标的建立 delta-neutral 头寸（多/空对冲）。
+- 机器人轮换：扫描机会 → 开仓 → 持有监控 → 平仓 → 冷却 → 下一轮。
+- 筛选门槛：funding 可用、成交量门槛、价差门槛、净 APR 门槛。
+- 风险控制：开仓单腿失败回滚；持仓期间止损触发平仓；平仓不完全检测并升级为 ERROR。
+- 状态持久化：重启后可恢复单一对冲仓位；发现多仓/不对冲时进入安全模式或 ERROR（策略可配置）。
+
+#### 1.2 非目标（可后续再做）
+- 多策略并行、跨多账户、跨多交易所扩展。
+- 完整的 GUI/监控平台。
+- 收益统计严谨会计（本文只要求“能记录关键数据并可审计”）。
+
+### 2. 系统目标与质量属性（工程约束）
+#### 2.1 可运行性（Deployability）
+- 在 Linux/macOS + Docker 中可一键运行（推荐 Docker）。
+- 启动时进行配置校验（env & config file），错误应 fail-fast。
+- 每个外部资源（HTTP client/WS/SDK client）必须有明确生命周期管理（可 close、可重连）。
+
+#### 2.2 正确性（Correctness，指逻辑闭环）
+- 开仓成功定义：两边仓位方向相反，且绝对数量在容忍误差内。
+- 平仓成功定义：两边仓位均归零（或低于最小 tick/step）。
+- 回滚必须覆盖：下单 API 报错、下单成功但未成交/未建仓（需要仓位确认超时机制）。
+
+#### 2.3 鲁棒性（Resilience）
+- 对 WS 超时、HTTP 429、暂时网络故障要有：
+  - 退避重试（exponential backoff）
+  - 降级策略（延迟下一轮、切换数据源、扩大下单跨价等）
+- 不允许在未知仓位状态下继续开新仓（必须先 ensure flat 或进入安全态）。
+
+#### 2.4 可维护性（Maintainability）
+- 策略与交易所适配层解耦（对称接口）。
+- 所有核心步骤结构化日志（JSON 或 key-value），可重放关键决策链。
+
+### 3. 配置规范
+#### 3.1 环境变量（env）
+必须项（缺失则启动失败）：
+- EdgeX：EDGEX_BASE_URL, EDGEX_ACCOUNT_ID(int), EDGEX_STARK_PRIVATE_KEY
+- Lighter：LIGHTER_BASE_URL, LIGHTER_WS_URL, API_KEY_PRIVATE_KEY, ACCOUNT_INDEX(int), API_KEY_INDEX(int)
+
+可选项：
+- EDGEX_WS_URL（若未来接入）
+
+#### 3.2 配置文件（bot_config.json）
+必须字段：
+- symbols_to_monitor: [str]
+- quote: "USD"
+- leverage: int
+- notional_per_position: float
+- hold_duration_hours: float
+- wait_between_cycles_minutes: float
+- check_interval_seconds: int
+- min_net_apr_threshold: float
+- min_volume_usd: float
+- max_spread_pct: float
+- cross_pct: float（统一管理侵入式限价跨价百分比）
+- enable_stop_loss: bool
+
+建议字段：
+- min_open_notional_usd: float（替代硬编码 10.0）
+- order_confirm_timeout_seconds: int
+- close_confirm_timeout_seconds: int
+- max_recoverable_symbols: int（默认 1）
+
+### 4. 核心业务流程（验收口径）
+#### 4.1 启动流程
+1) 读取 env & config（校验）
+2) 初始化日志系统
+3) 加载 state（SQLite，见 Part C）
+4) 执行 recover：
+   - 若发现可恢复的单一对冲仓位 → 进入 HOLDING
+   - 若发现非对冲/多仓 → 进入 SAFE/ERROR（按配置）
+5) 启动前清理残留挂单（至少 Lighter）
+6) 进入主循环
+
+#### 4.2 扫描机会（ANALYZING）
+对每个 symbol 生成 Opportunity：
+- 数据项：edgex_rate, lighter_rate, edgex_apr, lighter_apr, net_apr, volume, spread
+- 过滤规则：
+  - funding 数据齐全
+  - total_volume >= min_volume_usd
+  - spread_pct <= max_spread_pct
+- 决策规则：
+  - long/short 方向由净 APR 更大的一侧决定
+  - 候选按 net_apr 降序且 net_apr >= min_net_apr_threshold
+
+#### 4.3 开仓（OPENING）
+- 读取两边 available balance，用 min() 决定最大可开 notional（考虑 leverage）并打安全折扣。
+- 计算 size_base：notional / mid
+- 统一舍入：保证两边 size_base 一致或在容忍误差内
+- 并发下单（两腿）
+- 订单确认：
+  - 在 confirm timeout 内必须观察到两边仓位建立（或订单成交回报）
+  - 若一腿失败或确认超时 → 回滚已成功腿 + 记录失败原因
+
+#### 4.4 持有监控（HOLDING）
+- 每 check_interval_seconds：
+  - 读取两边仓位与 uPnL（或止损指标）
+  - 更新 state
+  - 若触发 stop loss 或达到 target_close_at → 进入平仓
+
+#### 4.5 平仓（CLOSING）
+- 并发平仓两腿（reduce-only + 侵入式限价）
+- 在 close confirm timeout 内必须确认两边仓位为零
+- 若平仓不完全：
+  - 执行补救策略（重新报价、撤单重发、扩大 cross_pct），超过上限进入 ERROR
+
+#### 4.6 冷却等待（WAITING）
+- 等待 wait_between_cycles_minutes
+- 回到 IDLE（下一轮）
+
+---
+
+## Part B — Blueprint 风格：从 0 到可运行的“代码骨架索引”（给初学者）
+
+这一节的目标：你按顺序创建文件、填入最小函数，就能先跑通 **M0/M1（DB + WS）**，再跑 **M2/M3（adapter + scanner）**。
+
+### B.1 推荐最简目录结构（直观、可逐步扩展）
+
+```text
+src/
+  main.py
+  config.py
+  logging_.py
+
+  util/
+    time.py
+    retry.py
+
+  db/
+    schema.sql
+    store.py
+
+  services/
+    lighter_userstats_service.py
+    lighter_ticker_service.py
+    lighter_orderbook_service.py   # 可选
+
+  exchanges/
+    edgex_adapter.py
+    lighter_adapter.py
+
+  core/
+    models.py
+    scanner.py
+    sizing.py
+    execution.py
+    orchestrator.py
+```
+
+### B.2 每个文件“应该提供什么”（核心函数签名）
+
+#### `src/config.py`
+- `load_env() -> Env`
+- `load_bot_config(path: str) -> BotConfig`
+
+#### `src/db/store.py`
+- `await start()` / `await close()`
+- `await init_schema(schema_sql: str)`
+- `await kv_set(key, value)` / `await kv_get(key)`
+- `await append_event(Event(...))`
+
+#### `src/services/lighter_userstats_service.py`
+- `await start()` / `await stop()`
+- `await wait_ready(timeout=...)`
+- `get_balance(max_age_seconds=...) -> (available, portfolio)`
+
+#### `src/services/lighter_ticker_service.py`
+- `await start()` / `await stop()`
+- `await subscribe(market_id)`
+- `get_best_bid_ask(market_id, max_age_seconds=...) -> (bid, ask)`
+
+#### `src/core/scanner.py`
+- `scan_all(symbols) -> list[Opportunity]`
+
+#### `src/core/execution.py`
+- `open_position(opportunity) -> PositionState`
+- `close_position(position) -> None`
+
+#### `src/core/orchestrator.py`
+- `run()`
+
+### B.3 初学者推荐的落地顺序
+1) 先实现 Store + schema（M0）。
+2) 再实现 UserStatsService + TickerService（M1）。
+3) main.py 同时启动 DB + WS 服务，每 10 秒写 events（证明链路稳定）。
+4) 再接 adapters + scanner。
+
+---
+
+## Part C — 工程指南：WS 常驻后台任务 + SQLite（SSOT + 审计）
+
+### C.1 你选择的落地方案
+- WS 服务（order book / ticker / user_stats）采用常驻后台任务 + 自动重连。
+- 状态存储使用 SQLite（aiosqlite），支持审计与重启恢复。
+
+### C.2 SQLite 表（最小集合，建议）
+- bot_kv：全局状态（state、schema_version、current_cycle_id）
+- cycles：每一轮开平仓闭环的业务记录
+- positions：当前活跃仓位（is_active=1 仅一条）
+- events：结构化事件流（JSON payload）
+- account_snapshots：余额/可用快照
+
+### C.3 WS 服务建议
+- 优先使用 ticker 作为 best bid/ask 执行价源。
+- order_book 用于深度过滤与诊断，采用 offset 序列校验 + gap 刷新。
+- user_stats 用于余额/可用保证金，常驻订阅。
+
+### C.4 Milestones（建议实现顺序）
+- M0：SQLite schema + store + state/event 基础
+- M1：UserStatsService + TickerService（可持续更新 + 自动重连）
+- M2：Adapters（最小查询能力）
+- M3：Scanner（输出候选、落库 events）
+- M4：Open execution（并发下单 + confirm + rollback + 落库 positions/cycles）
+- M5：Close execution（并发平仓 + confirm + 补救 + ERROR）
+- M6：Recovery（重启恢复/安全阻断）
+
+---
+
+## Part D — Lighter WebSocket（订阅 / 字段 / 一致性 / 恢复）
+
+### D.1 权威参考
+- https://apidocs.lighter.xyz/docs/websocket-reference#order-book
+
+### D.2 订阅与频道（已验证）
+- order_book subscribe: `{"type":"subscribe","channel":"order_book/{MARKET_INDEX}"}`
+  - push channel: `order_book:{MARKET_INDEX}`
+- ticker subscribe: `{"type":"subscribe","channel":"ticker/{MARKET_INDEX}"}`
+  - push channel: `ticker:{MARKET_INDEX}`
+- user_stats subscribe: `{"type":"subscribe","channel":"user_stats/{ACCOUNT_INDEX}"}`
+
+### D.3 字段解释（抓包样例）
+#### update/order_book
+- `order_book.bids/asks` 是增量列表，`size==0` 删除价位
+- `offset` 用于 +1 序列校验
+
+#### update/ticker
+- `ticker.a` best ask
+- `ticker.b` best bid
+
+### D.4 一致性规则（建议）
+- order_book: offset 必须严格 +1；gap/integrity fail 刷新订阅
+- getter 做 max_age_seconds 过期保护，过期禁止用于交易
+
+---
+
+## Appendix — M0/M1 最小可运行 Demo (copy-paste)
+
+> Target: validate two things (no trading yet)
+> 1) SQLite can write `state/events`
+> 2) Lighter WS (user_stats + ticker) can run as background tasks and keep updating
+
+### Install
+```bash
+pip install aiosqlite websockets
+```
+
+### Environment
+```bash
+export LIGHTER_WS_URL=wss://mainnet.zklighter.elliot.ai/stream
+export ACCOUNT_INDEX=0
+export MARKET_ID=0
+```
+
+### `src/db/schema.sql`
+```sql
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
+
+CREATE TABLE IF NOT EXISTS bot_kv (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  level TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  cycle_id INTEGER,
+  position_id INTEGER,
+  data_json TEXT NOT NULL,
+  message TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
+```
+
+### `src/util/time.py`
+```python
+from datetime import datetime, timezone
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+```
+
+### `src/util/retry.py`
+```python
+import asyncio
+import random
+from dataclasses import dataclass
+
+@dataclass
+class Backoff:
+    initial: float = 1.0
+    factor: float = 2.0
+    maximum: float = 30.0
+    jitter: float = 0.25
+
+    def delay(self, attempt: int) -> float:
+        base = min(self.initial * (self.factor ** attempt), self.maximum)
+        j = base * self.jitter
+        return base + random.uniform(-j, j)
+
+async def sleep_backoff(backoff: Backoff, attempt: int) -> None:
+    await asyncio.sleep(max(0.0, backoff.delay(attempt)))
+```
+
+### `src/db/store.py`
+```python
+import json
+from dataclasses import dataclass
+from typing import Optional
+
+import aiosqlite
+
+from util.time import utc_now_iso
+
+@dataclass
+class Event:
+    level: str
+    event_type: str
+    data: dict
+    message: str = ""
+    cycle_id: Optional[int] = None
+    position_id: Optional[int] = None
+    ts: Optional[str] = None
+
+class Store:
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self._conn: Optional[aiosqlite.Connection] = None
+
+    async def start(self) -> None:
+        self._conn = await aiosqlite.connect(self.db_path)
+        self._conn.row_factory = aiosqlite.Row
+        await self._conn.execute("PRAGMA journal_mode=WAL;")
+        await self._conn.execute("PRAGMA synchronous=NORMAL;")
+        await self._conn.execute("PRAGMA busy_timeout=5000;")
+        await self._conn.commit()
+
+    async def close(self) -> None:
+        if self._conn:
+            await self._conn.close()
+            self._conn = None
+
+    @property
+    def conn(self) -> aiosqlite.Connection:
+        assert self._conn is not None, "Store not started"
+        return self._conn
+
+    async def init_schema(self, schema_sql: str) -> None:
+        await self.conn.executescript(schema_sql)
+        await self.conn.commit()
+
+    async def kv_set(self, key: str, value: str) -> None:
+        now = utc_now_iso()
+        await self.conn.execute(
+            "INSERT INTO bot_kv(key,value,updated_at) VALUES(?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            (key, value, now),
+        )
+        await self.conn.commit()
+
+    async def append_event(self, ev: Event) -> None:
+        ts = ev.ts or utc_now_iso()
+        await self.conn.execute(
+            "INSERT INTO events(ts,level,event_type,cycle_id,position_id,data_json,message) VALUES(?,?,?,?,?,?,?)",
+            (ts, ev.level, ev.event_type, ev.cycle_id, ev.position_id, json.dumps(ev.data, ensure_ascii=False), ev.message),
+        )
+        await self.conn.commit()
+```
+
+### `src/services/lighter_userstats_service.py`
+```python
+import asyncio
+import json
+import logging
+import time
+from dataclasses import dataclass
+from typing import Optional, Tuple
+
+import websockets
+
+from util.retry import Backoff, sleep_backoff
+
+logger = logging.getLogger(__name__)
+
+class StaleDataError(RuntimeError):
+    pass
+
+@dataclass
+class UserStatsSnapshot:
+    available: float
+    portfolio: float
+    ts_epoch: float
+
+class LighterUserStatsService:
+    def __init__(self, ws_url: str, account_index: int):
+        self.ws_url = ws_url
+        self.account_index = account_index
+
+        self._task: Optional[asyncio.Task] = None
+        self._stop = asyncio.Event()
+        self._lock = asyncio.Lock()
+
+        self._snap: Optional[UserStatsSnapshot] = None
+        self._ready = asyncio.Event()
+
+    async def start(self) -> None:
+        if self._task:
+            return
+        self._stop.clear()
+        self._task = asyncio.create_task(self._run(), name="lighter-userstats")
+
+    async def stop(self) -> None:
+        self._stop.set()
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+
+    async def wait_ready(self, timeout: float = 30.0) -> None:
+        await asyncio.wait_for(self._ready.wait(), timeout=timeout)
+
+    async def get_balance(self, max_age_seconds: float = 10.0) -> Tuple[float, float]:
+        now = time.time()
+        async with self._lock:
+            if not self._snap:
+                raise StaleDataError("no user_stats")
+            age = now - self._snap.ts_epoch
+            if age > max_age_seconds:
+                raise StaleDataError(f"user_stats stale age={age:.2f}s")
+            return self._snap.available, self._snap.portfolio
+
+    async def _run(self) -> None:
+        backoff = Backoff()
+        attempt = 0
+        sub_msg = {"type": "subscribe", "channel": f"user_stats/{self.account_index}"}
+
+        while not self._stop.is_set():
+            try:
+                async with websockets.connect(self.ws_url, ping_interval=None) as ws:
+                    attempt = 0
+                    await ws.send(json.dumps(sub_msg))
+                    while not self._stop.is_set():
+                        raw = await ws.recv()
+                        msg = json.loads(raw)
+                        t = msg.get("type")
+                        if t == "ping":
+                            await ws.send(json.dumps({"type": "pong"}))
+                            continue
+                        if t not in ("update/user_stats", "subscribed/user_stats"):
+                            continue
+                        stats = msg.get("stats") or {}
+                        avail = float(stats.get("available_balance", 0) or 0)
+                        port = float(stats.get("portfolio_value", 0) or 0)
+                        async with self._lock:
+                            self._snap = UserStatsSnapshot(available=avail, portfolio=port, ts_epoch=time.time())
+                        self._ready.set()
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning("UserStats WS error: %s", e)
+                await sleep_backoff(backoff, attempt)
+                attempt += 1
+```
+
+### `src/services/lighter_ticker_service.py`
+```python
+import asyncio
+import json
+import logging
+import time
+from dataclasses import dataclass
+from typing import Dict, Optional, Tuple
+
+import websockets
+
+from util.retry import Backoff, sleep_backoff
+
+logger = logging.getLogger(__name__)
+
+class StaleDataError(RuntimeError):
+    pass
+
+def _parse_mid(channel: str) -> Optional[int]:
+    if not isinstance(channel, str) or not channel.startswith("ticker:"):
+        return None
+    try:
+        return int(channel.split(":", 1)[1])
+    except Exception:
+        return None
+
+@dataclass
+class TickerTop:
+    bid: Optional[float] = None
+    ask: Optional[float] = None
+    ts_epoch: float = 0.0
+
+class LighterTickerService:
+    def __init__(self, ws_url: str):
+        self.ws_url = ws_url
+        self._stop = asyncio.Event()
+        self._task: Optional[asyncio.Task] = None
+        self._ws = None
+        self._lock = asyncio.Lock()
+        self._subscribed: set[int] = set()
+        self._tops: Dict[int, TickerTop] = {}
+
+    async def start(self) -> None:
+        if self._task:
+            return
+        self._stop.clear()
+        self._task = asyncio.create_task(self._run(), name="lighter-ticker")
+
+    async def stop(self) -> None:
+        self._stop.set()
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+
+    async def subscribe(self, market_id: int) -> None:
+        mid = int(market_id)
+        async with self._lock:
+            self._subscribed.add(mid)
+            self._tops.setdefault(mid, TickerTop())
+        if self._ws:
+            await self._ws.send(json.dumps({"type": "subscribe", "channel": f"ticker/{mid}"}))
+
+    async def get_best_bid_ask(self, market_id: int, max_age_seconds: float = 3.0) -> Tuple[float, float]:
+        mid = int(market_id)
+        now = time.time()
+        async with self._lock:
+            top = self._tops.get(mid)
+            if not top or top.bid is None or top.ask is None:
+                raise StaleDataError("ticker not ready")
+            age = now - top.ts_epoch
+            if age > max_age_seconds:
+                raise StaleDataError(f"ticker stale age={age:.2f}s")
+            return float(top.bid), float(top.ask)
+
+    async def _run(self) -> None:
+        backoff = Backoff()
+        attempt = 0
+        while not self._stop.is_set():
+            try:
+                async with websockets.connect(self.ws_url, ping_interval=None) as ws:
+                    self._ws = ws
+                    attempt = 0
+                    async with self._lock:
+                        mids = sorted(self._subscribed)
+                    for mid in mids:
+                        await ws.send(json.dumps({"type": "subscribe", "channel": f"ticker/{mid}"}))
+
+                    while not self._stop.is_set():
+                        raw = await ws.recv()
+                        msg = json.loads(raw)
+                        t = msg.get("type")
+                        if t == "ping":
+                            await ws.send(json.dumps({"type": "pong"}))
+                            continue
+                        if t != "update/ticker":
+                            continue
+                        mid = _parse_mid(msg.get("channel", ""))
+                        if mid is None:
+                            continue
+                        tick = msg.get("ticker") or {}
+                        a = tick.get("a") or {}
+                        b = tick.get("b") or {}
+                        try:
+                            ask = float(a.get("price"))
+                            bid = float(b.get("price"))
+                        except Exception:
+                            continue
+                        async with self._lock:
+                            top = self._tops.setdefault(mid, TickerTop())
+                            top.ask = ask
+                            top.bid = bid
+                            top.ts_epoch = time.time()
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning("Ticker WS error: %s", e)
+                self._ws = None
+                await sleep_backoff(backoff, attempt)
+                attempt += 1
+```
+
+### `src/logging_.py`
+```python
+import logging
+import sys
+
+def setup_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+        force=True,
+    )
+```
+
+### `src/main.py`
+```python
+import asyncio
+import logging
+import os
+from pathlib import Path
+
+from logging_ import setup_logging
+from db.store import Store, Event
+from services.lighter_userstats_service import LighterUserStatsService
+from services.lighter_ticker_service import LighterTickerService
+
+logger = logging.getLogger(__name__)
+
+async def main():
+    setup_logging()
+
+    ws_url = os.environ.get("LIGHTER_WS_URL", "wss://mainnet.zklighter.elliot.ai/stream")
+    account_index = int(os.environ.get("ACCOUNT_INDEX", "0"))
+    market_id = int(os.environ.get("MARKET_ID", "0"))
+
+    store = Store("bot.sqlite3")
+    await store.start()
+    await store.init_schema(Path("src/db/schema.sql").read_text(encoding="utf-8"))
+
+    await store.kv_set("state", "BOOT")
+    await store.append_event(Event(level="info", event_type="BOOT", data={"ws_url": ws_url}))
+
+    userstats = LighterUserStatsService(ws_url, account_index)
+    ticker = LighterTickerService(ws_url)
+
+    await userstats.start()
+    await ticker.start()
+    await ticker.subscribe(market_id)
+
+    await userstats.wait_ready(timeout=30)
+    await store.kv_set("state", "RUNNING")
+
+    try:
+        while True:
+            avail, port = await userstats.get_balance()
+            bid, ask = await ticker.get_best_bid_ask(market_id)
+
+            logger.info("balance avail=%.2f port=%.2f | ticker bid=%.2f ask=%.2f", avail, port, bid, ask)
+
+            await store.append_event(Event(
+                level="info",
+                event_type="SNAPSHOT",
+                data={
+                    "exchange": "lighter",
+                    "available": avail,
+                    "portfolio": port,
+                    "market_id": market_id,
+                    "bid": bid,
+                    "ask": ask,
+                },
+            ))
+
+            await asyncio.sleep(10)
+
+    finally:
+        await userstats.stop()
+        await ticker.stop()
+        await store.close()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### Run
+```bash
+python -m src.main
+```
+
+Expected:
+- prints every 10 seconds
+- `bot.sqlite3` keeps growing (events inserted)
