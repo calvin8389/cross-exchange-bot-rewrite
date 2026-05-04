@@ -54,6 +54,13 @@ class Store:
         )
         await self.conn.commit()
 
+    async def kv_get(self, key: str) -> Optional[str]:
+        row = await self.conn.execute(
+            "SELECT value FROM bot_kv WHERE key=?", (key,)
+        )
+        r = await row.fetchone()
+        return r["value"] if r else None
+
     async def append_event(self, ev: Event) -> None:
         ts = ev.ts or utc_now_iso()
         await self.conn.execute(
