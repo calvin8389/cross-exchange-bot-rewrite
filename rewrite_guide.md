@@ -7,6 +7,7 @@
 > - Blueprint-style guide (how to structure code)
 > - Engineering guide (WS background services + SQLite audit store)
 > - Lighter WebSocket protocol notes (order_book + ticker + user_stats)
+> - Lessons from old code (patterns to preserve / patterns to avoid)
 > - Appendix: M0/M1 minimal runnable demo (copy-paste)
 >
 ---
@@ -42,6 +43,7 @@
   - 退避重试（exponential backoff）
   - 降级策略（延迟下一轮、切换数据源、扩大下单跨价等）
 - 不允许在未知仓位状态下继续开新仓（必须先 ensure flat 或进入安全态）。
+- **StaleDataError 防护**：WS 服务的 getter（`get_balance`、`get_best_bid_ask`）在数据超过 `max_age_seconds` 时会抛出 `StaleDataError`。所有调用方**必须 catch 此异常**并降级处理（continue 跳过本轮、记录 warning event、或触发 WS 重连），不得让异常传播导致进程退出。主循环的 `asyncio.sleep` 间隔应**严格小于** `max_age_seconds`（建议 sleep ≤ 0.5 × max_age），为 WS 推送留出缓冲。
 
 #### 2.4 可维护性（Maintainability）
 - 策略与交易所适配层解耦（对称接口）。
@@ -195,10 +197,22 @@ src/
 #### `src/core/orchestrator.py`
 - `run()`
 
+#### `src/core/models.py`
+- `BotState(StrEnum)` — IDLE / ANALYZING / OPENING / HOLDING / CLOSING / WAITING / ERROR / SHUTDOWN
+- `Opportunity` (dataclass) — symbol, edgex_rate, lighter_rate, edgex_apr, lighter_apr, net_apr, volume, spread, direction (which side to long)
+- `PositionState` (dataclass) — symbol, edgex_size, lighter_size, edgex_entry, lighter_entry, opened_at, cycle_id
+- `CycleRecord` (dataclass) — cycle_id, symbol, opened_at, closed_at, edgex_pnl, lighter_pnl, net_pnl, status
+
+#### `src/core/sizing.py`
+- `calculate_position_size(available_edgex, available_lighter, leverage, mid_price, safety_factor=0.95) -> float` — `min(edgex_avail, lighter_avail) * leverage * safety_factor / mid_price`
+- `unify_tick_size(size, edgex_tick, lighter_tick) -> float` — 取较粗 tick，floor 到一致精度
+
 ### B.3 初学者推荐的落地顺序
-1) 先实现 Store + schema（M0）。
+1) 先实现 Store + schema（M0）。**Store 必须同时提供 `kv_set()` 和 `kv_get()`**，后者是 M6 Recovery 的前置依赖。
 2) 再实现 UserStatsService + TickerService（M1）。
 3) main.py 同时启动 DB + WS 服务，每 10 秒写 events（证明链路稳定）。
+   - **M1 验收关键**：main loop 必须 catch `StaleDataError` 并 continue，不能 crash。
+   - `asyncio.sleep` 间隔建议设为 5s（远小于 `get_balance(max_age_seconds=10)` 和 `get_best_bid_ask(max_age_seconds=3)`），避免正常波动导致超时。
 4) 再接 adapters + scanner。
 
 ---
@@ -215,6 +229,63 @@ src/
 - positions：当前活跃仓位（is_active=1 仅一条）
 - events：结构化事件流（JSON payload）
 - account_snapshots：余额/可用快照
+
+**DDL 参考（cycles / positions / account_snapshots）：**
+
+```sql
+-- 每轮交易闭环记录
+CREATE TABLE IF NOT EXISTS cycles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  symbol TEXT NOT NULL,
+  state TEXT NOT NULL,              -- OPENING / HOLDING / CLOSING / CLOSED / ERROR
+  direction TEXT NOT NULL,          -- long_edgex_short_lighter / short_edgex_long_lighter
+  edgex_size REAL,
+  lighter_size REAL,
+  edgex_entry_price REAL,
+  lighter_entry_price REAL,
+  opened_at TEXT,
+  closed_at TEXT,
+  edgex_close_pnl REAL,
+  lighter_close_pnl REAL,
+  leverage INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- 当前活跃仓位（最多一条 is_active=1）
+CREATE TABLE IF NOT EXISTS positions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  cycle_id INTEGER NOT NULL REFERENCES cycles(id),
+  symbol TEXT NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 1,  -- 1 = open, 0 = closed
+  edgex_contract_id TEXT,
+  edgex_side TEXT,                        -- BUY / SELL
+  edgex_size REAL,
+  edgex_entry_price REAL,
+  edgex_unrealized_pnl REAL,
+  lighter_market_id INTEGER,
+  lighter_side TEXT,                      -- BUY / SELL
+  lighter_size REAL,
+  lighter_entry_price REAL,
+  lighter_unrealized_pnl REAL,
+  stop_loss_price REAL,
+  target_close_at TEXT,
+  opened_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_positions_active ON positions(is_active);
+
+-- 定期账户快照（余额/可用/投资组合值）
+CREATE TABLE IF NOT EXISTS account_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  exchange TEXT NOT NULL,                -- edgex / lighter
+  total_equity REAL,
+  available_balance REAL,
+  portfolio_value REAL,
+  ts TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_snapshots_exchange_ts ON account_snapshots(exchange, ts);
+```
 
 ### C.3 WS 服务建议
 - 优先使用 ticker 作为 best bid/ask 执行价源。
@@ -256,6 +327,105 @@ src/
 ### D.4 一致性规则（建议）
 - order_book: offset 必须严格 +1；gap/integrity fail 刷新订阅
 - getter 做 max_age_seconds 过期保护，过期禁止用于交易
+
+---
+
+## Part E — Lessons from Old Code（`old/` 参考代码分析）
+
+旧代码是一套已生产运行的 delta-neutral 轮换套利机器人（`old/lighter_edgex_hedge.py`，3496 行）。以下是从中提取的**应保留模式**和**应避免模式**，以及跨交易所对接的踩坑记录。
+
+### E.1 应保留的设计模式
+
+| 模式 | 旧代码位置 | 新代码应如何采纳 |
+|---|---|---|
+| **并发开平仓 + 单腿失败回滚** | `lighter_edgex_hedge.py:open_delta_neutral_position()` | `core/execution.py`：`asyncio.gather()` 双腿下单，任一腿失败 → 立即 close 成功腿 + log error event |
+| **Decimal tick-aware 舍入** | `edgex_client.py:_round_to_tick()`, `_ceil_to_tick()`, `_floor_to_tick()` | `core/sizing.py`：使用 `Decimal` 而非 `float`；取两交易所较粗 tick size，floor 保证两边 size 一致 |
+| **启动 ensure-accounts-flat** | `lighter_edgex_hedge.py:ensure_accounts_flat()` | `core/orchestrator.py` 启动流程：扫描两交易所所有非零仓位，发现未托管仓位 → ERROR 阻断 |
+| **Funding rate 缓存（300s TTL）** | `lighter_edgex_hedge.py:FUNDING_CACHE` | `core/scanner.py`：字典缓存 `{symbol: (rate, ts)}`，过期重新获取 |
+| **Aggressive limit order（3% 跨价）** | `edgex_client.py:cross_price()` | `exchanges/` adapters：BUY = mid × (1 + cross_pct/100)，SELL = mid × (1 - cross_pct/100)；`cross_pct` 从 `bot_config.json` 读取，不再硬编码 |
+| **Close confirm + 重试** | `lighter_edgex_hedge.py:close_delta_neutral_position()` | `core/execution.py`：平仓后轮询仓位归零（最多 2 次重试），不完整 → 扩大 cross_pct 重试 → 仍失败 → ERROR |
+| **止损自动计算** | `lighter_edgex_hedge.py:check_stop_loss()` | `core/orchestrator.py` HOLDING 监控：`stop_loss_pct = (100 / leverage) * 0.7`，基于维持保证金模型 |
+| **原子写入 state 文件** | `lighter_edgex_hedge.py:StateManager`（temp file + `os.replace()`） | `db/store.py`：SQLite 事务已提供原子性，无需额外处理 |
+
+### E.2 应避免的设计问题（新代码已/应改进）
+
+| 旧代码问题 | 影响 | 新代码改进方案 |
+|---|---|---|
+| **每次查询新建临时 WS 连接** | `lighter_client.py` 中 `get_lighter_balance()`、`LighterOrderBookFetcher` 每次创建新 WS 连接再关闭，延迟高、资源浪费 | ✅ 已改：`src/services/` 使用常驻后台 asyncio Task + 自动重连 |
+| **3496 行单文件** | 测试困难、职责不清、改动风险大 | ✅ 已改：模块化 `src/` package（db / services / exchanges / core） |
+| **JSON 文件存状态** | 无查询能力、无并发安全、无可审计性 | ✅ 已改：SQLite + events 审计日志 |
+| **`cross_pct=3.0` 硬编码** | `edgex_client.py` 和 `lighter_client.py` 中写死，调整需改代码 | `bot_config.json` 中统一管理，adapter 从配置读取 |
+| **全局 `asyncio.Semaphore(2)`** | 所有 Lighter 调用共用一个限流器，粒度太粗 | 改为 per-adapter 限流，或基于 endpoint 的细粒度限流 |
+| **字符串状态名（`"IDLE"`）** | 无类型检查，typo 风险 | 使用 `enum.StrEnum`（`core/models.py` 中 `BotState`） |
+| **双配置文件源** | `.env` + `bot_config.json` 分开管理，启动前需检查两处 | `src/config.py` 统一加载、校验、导出 `AppConfig` |
+| **Scanner 串行查询** | `check_all_spreads.py` 每个 symbol 间隔 1s，全量扫描耗时长 | 可并行 `asyncio.gather()` + per-symbol 小延迟防 rate limit |
+
+### E.3 交易所对接踩坑记录（直接写入 adapter 实现注释）
+
+**EdgeX (`edgex_client.py`)**：
+- `account_id` 传给 SDK 时**必须是 `int`**，不能是字符串（SDK 内部有位运算）
+- `contract_id` 在 `CreateOrderParams` 中**必须是 `str`**
+- 合约命名格式：`{SYMBOL}{QUOTE}`（如 `"BTCUSD"`），不是 `"BTC-USD"`
+- 设置杠杆地址：`/api/v1/private/account/updateLeverageSetting`（内部接口，非公开 SDK）
+- `get_24_hour_quote()` 的 `value` 字段是 24h 成交量（USD），不是 `volume`
+
+**Lighter (`lighter_client.py`)**：
+- 仓位大小：`pos.position * pos.sign`（`pos.position` 是无符号量，`pos.sign` 为 ±1），**不是** `pos.size`
+- 开仓均价：`pos.avg_entry_price`，**不是** `pos.entry_price`
+- 平仓：必须在 `signer.create_order()` 中传 `reduce_only=1`
+- Market 识别：Lighter 用数字 ID，EdgeX 用字符串 contract_id，映射关系见 `doc/markets_and_indexes.txt`
+- 资金费率查询：`FundingApi.funding_rates()` 返回的 ` Funding` 字段注意大小写
+
+### E.4 `src/core/models.py` 类型定义参考
+
+```python
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Optional
+
+class BotState(StrEnum):
+    IDLE = "IDLE"
+    ANALYZING = "ANALYZING"
+    OPENING = "OPENING"
+    HOLDING = "HOLDING"
+    CLOSING = "CLOSING"
+    WAITING = "WAITING"
+    ERROR = "ERROR"
+    SHUTDOWN = "SHUTDOWN"
+
+@dataclass
+class Opportunity:
+    symbol: str
+    edgex_rate: Optional[float] = None
+    lighter_rate: Optional[float] = None
+    edgex_apr: float = 0.0
+    lighter_apr: float = 0.0
+    net_apr: float = 0.0
+    volume: float = 0.0
+    spread: float = 0.0
+    direction: str = ""          # "long_edgex_short_lighter" | "short_edgex_long_lighter"
+
+@dataclass
+class PositionState:
+    symbol: str
+    cycle_id: int
+    edgex_size: float = 0.0
+    lighter_size: float = 0.0
+    edgex_entry: float = 0.0
+    lighter_entry: float = 0.0
+    opened_at: str = ""
+
+@dataclass
+class CycleRecord:
+    cycle_id: int
+    symbol: str
+    state: BotState = BotState.IDLE
+    opened_at: Optional[str] = None
+    closed_at: Optional[str] = None
+    edgex_pnl: float = 0.0
+    lighter_pnl: float = 0.0
+    net_pnl: float = 0.0
+```
 
 ---
 
@@ -341,7 +511,7 @@ from typing import Optional
 
 import aiosqlite
 
-from util.time import utc_now_iso
+from src.util.time import utc_now_iso
 
 @dataclass
 class Event:
@@ -389,6 +559,13 @@ class Store:
         )
         await self.conn.commit()
 
+    async def kv_get(self, key: str) -> Optional[str]:
+        row = await self.conn.execute(
+            "SELECT value FROM bot_kv WHERE key=?", (key,)
+        )
+        r = await row.fetchone()
+        return r["value"] if r else None
+
     async def append_event(self, ev: Event) -> None:
         ts = ev.ts or utc_now_iso()
         await self.conn.execute(
@@ -409,7 +586,7 @@ from typing import Optional, Tuple
 
 import websockets
 
-from util.retry import Backoff, sleep_backoff
+from src.util.retry import Backoff, sleep_backoff
 
 logger = logging.getLogger(__name__)
 
@@ -508,7 +685,7 @@ from typing import Dict, Optional, Tuple
 
 import websockets
 
-from util.retry import Backoff, sleep_backoff
+from src.util.retry import Backoff, sleep_backoff
 
 logger = logging.getLogger(__name__)
 
@@ -639,20 +816,26 @@ def setup_logging() -> None:
 
 ### `src/main.py`
 ```python
+from __future__ import annotations
+
 import asyncio
 import logging
 import os
 from pathlib import Path
 
-from logging_ import setup_logging
-from db.store import Store, Event
-from services.lighter_userstats_service import LighterUserStatsService
-from services.lighter_ticker_service import LighterTickerService
+from dotenv import load_dotenv
+
+from src.logging_ import setup_logging
+from src.db.store import Store, Event
+from src.services.lighter_userstats_service import LighterUserStatsService, StaleDataError
+from src.services.lighter_ticker_service import LighterTickerService
 
 logger = logging.getLogger(__name__)
 
-async def main():
+
+async def main() -> None:
     setup_logging()
+    load_dotenv()
 
     ws_url = os.environ.get("LIGHTER_WS_URL", "wss://mainnet.zklighter.elliot.ai/stream")
     account_index = int(os.environ.get("ACCOUNT_INDEX", "0"))
@@ -677,8 +860,17 @@ async def main():
 
     try:
         while True:
-            avail, port = await userstats.get_balance()
-            bid, ask = await ticker.get_best_bid_ask(market_id)
+            try:
+                avail, port = await userstats.get_balance()
+                bid, ask = await ticker.get_best_bid_ask(market_id)
+            except StaleDataError as e:
+                logger.warning("Stale data, skipping snapshot: %s", e)
+                await store.append_event(Event(
+                    level="warn", event_type="STALE_DATA",
+                    data={"reason": str(e)},
+                ))
+                await asyncio.sleep(3)
+                continue
 
             logger.info("balance avail=%.2f port=%.2f | ticker bid=%.2f ask=%.2f", avail, port, bid, ask)
 
@@ -695,12 +887,13 @@ async def main():
                 },
             ))
 
-            await asyncio.sleep(10)
+            await asyncio.sleep(5)
 
     finally:
         await userstats.stop()
         await ticker.stop()
         await store.close()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
