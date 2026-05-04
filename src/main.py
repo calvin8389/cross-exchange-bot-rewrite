@@ -9,8 +9,8 @@ from dotenv import load_dotenv
 
 from src.db.store import Event, Store
 from src.logging_ import setup_logging
-from src.services.lighter_ticker_service import LighterTickerService
-from src.services.lighter_userstats_service import LighterUserStatsService
+from src.services.lighter_ticker_service import LighterTickerService, StaleDataError as TickerStaleError
+from src.services.lighter_userstats_service import LighterUserStatsService, StaleDataError
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +40,30 @@ async def main() -> None:
     await userstats.wait_ready(timeout=30)
     await store.kv_set("state", "RUNNING")
 
+    stale_count = 0
     try:
         while True:
-            avail, port = await userstats.get_balance()
-            bid, ask = await ticker.get_best_bid_ask(market_id)
+            try:
+                avail, port = await userstats.get_balance()
+                bid, ask = await ticker.get_best_bid_ask(market_id)
+            except (StaleDataError, TickerStaleError) as e:
+                stale_count += 1
+                logger.warning("Stale data (count=%d): %s", stale_count, e)
+                await store.append_event(
+                    Event(level="warn", event_type="STALE_DATA", data={"reason": str(e)})
+                )
+                if stale_count >= 3:
+                    logger.error("Stale data persisted, restarting services...")
+                    await userstats.stop()
+                    await ticker.stop()
+                    await userstats.start()
+                    await ticker.start()
+                    await ticker.subscribe(market_id)
+                    await userstats.wait_ready(timeout=30)
+                    stale_count = 0
+                await asyncio.sleep(3)
+                continue
+            stale_count = 0
 
             logger.info("balance avail=%.2f port=%.2f | ticker bid=%.2f ask=%.2f", avail, port, bid, ask)
 
@@ -62,7 +82,7 @@ async def main() -> None:
                 )
             )
 
-            await asyncio.sleep(10)
+            await asyncio.sleep(5)
 
     finally:
         await userstats.stop()

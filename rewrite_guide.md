@@ -45,10 +45,9 @@
 - 不允许在未知仓位状态下继续开新仓（必须先 ensure flat 或进入安全态）。
 - **StaleDataError 防护**：WS 服务的 getter（`get_balance`、`get_best_bid_ask`）在数据超过 `max_age_seconds` 时会抛出 `StaleDataError`。所有调用方**必须 catch 此异常**并降级处理，不得让异常传播导致进程退出。
   - **sleep 间隔约束**：主循环的 `asyncio.sleep` 应**显著小于** `max_age_seconds`（建议取 `max_age` 的 1/2 到 1/3，但不超过 5s 上限以控制写库/日志压力）。例如：ticker `max_age=3s` → sleep 1s；userstats `max_age=10s` → sleep 5s。
-  - **降级优先级**：
-    1) 记录 `STALE_DATA` warn event（含 reason 字段）
-    2) continue 跳过本轮快照/交易
-    3) 若**连续 N 次** stale（建议 N=3），再触发对应 WS service 重启/重连，避免短暂网络抖动误伤
+  - **降级优先级（区分阶段）**：
+    - **Scanner/快照阶段**：stale → 记录 `STALE_DATA` warn event → continue 跳过本轮 → 若**连续 N 次** stale（建议 N=3），触发对应 WS service 重启/重连
+    - **OPENING/CLOSING 执行阶段**：stale → **不允许继续下单**；应进入短暂 WAIT/RETRY 或触发 service 重连，直到数据恢复或超时进入 ERROR。禁止用过期价格执行交易
 
 #### 2.4 可维护性（Maintainability）
 - 策略与交易所适配层解耦（对称接口）。
