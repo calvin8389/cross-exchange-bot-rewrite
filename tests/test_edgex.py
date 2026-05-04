@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""EdgeX adapter smoke test — public data + account data.
+
+Usage:
+  python tests/test_edgex.py              # all checks
+  python tests/test_edgex.py --public     # public data only (no auth)
+  python tests/test_edgex.py --account    # account data only
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+def _header(title: str) -> None:
+    print(f"\n{'='*60}")
+    print(f"  {title}")
+    print(f"{'='*60}")
+
+
+def _ok(label: str, value: object) -> None:
+    print(f"  \033[32m✓\033[0m {label}: {value}")
+
+
+def _fail(label: str, reason: str) -> None:
+    print(f"  \033[31m✗\033[0m {label}: {reason}")
+
+
+def _get_env_or_die(key: str) -> str:
+    val = os.environ.get(key, "").strip()
+    if not val:
+        print(f"FATAL: {key} not set in .env")
+        sys.exit(1)
+    return val
+
+
+# ---------------------------------------------------------------------------
+# public data
+# ---------------------------------------------------------------------------
+
+async def test_public(contract: str) -> None:
+    _header("Public Data (no auth required)")
+
+    from edgex_sdk import Client
+
+    client = Client(
+        base_url="https://pro.edgex.exchange",
+        account_id=0,
+        stark_private_key="0x0",
+    )
+
+    # --- metadata (market list) ---
+    try:
+        meta = await client.get_metadata()
+        contracts = meta.get("contracts", [])
+        _ok("get_metadata", f"{len(contracts)} contracts loaded")
+
+        for c in contracts[:5]:
+            cid = c.get("contractId", "?")
+            tick = c.get("tickSize", "?")
+            step = c.get("stepSize", "?")
+            print(f"      {cid:20s}  tick={tick}\tstep={step}")
+        if len(contracts) > 5:
+            print(f"      ... and {len(contracts) - 5} more")
+
+        target = next((c for c in contracts if c.get("contractId") == contract), None)
+        if target:
+            _ok("contract lookup", f"{contract} → tick={target['tickSize']} step={target['stepSize']}")
+        else:
+            _fail("contract lookup", f"{contract} not found in metadata")
+    except Exception as e:
+        _fail("get_metadata", str(e))
+
+    # --- 24h quote ---
+    try:
+        quote = await client.get_24_hour_quote(contract)
+        last = quote.get("lastPrice", "N/A")
+        bid = quote.get("bidPrice", "N/A")
+        ask = quote.get("askPrice", "N/A")
+        vol = quote.get("volume", "N/A")
+        funding = quote.get("fundingRate", "N/A")
+        _ok("get_24_hour_quote", f"last={last}  bid={bid}  ask={ask}  vol={vol}  funding={funding}")
+    except Exception as e:
+        _fail("get_24_hour_quote", str(e))
+
+    await client.close()
+
+
+# ---------------------------------------------------------------------------
+# account data
+# ---------------------------------------------------------------------------
+
+async def test_account(contract: str) -> None:
+    _header("Account Data (auth required)")
+
+    from edgex_sdk import Client
+
+    base_url = _get_env_or_die("EDGEX_BASE_URL")
+    account_id = int(_get_env_or_die("EDGEX_ACCOUNT_ID"))
+    private_key = _get_env_or_die("EDGEX_STARK_PRIVATE_KEY")
+
+    client = Client(
+        base_url=base_url,
+        account_id=account_id,
+        stark_private_key=private_key,
+    )
+
+    # --- balance ---
+    try:
+        asset = await client.get_account_asset()
+        equity = float(asset.get("totalEquity", 0))
+        avail = float(asset.get("availableAmount", 0))
+        _ok("get_account_asset", f"totalEquity={equity:.2f}  available={avail:.2f}")
+    except Exception as e:
+        _fail("get_account_asset", str(e))
+
+    # --- positions ---
+    try:
+        positions = await client.get_account_positions()
+        pos_list = positions.get("positions", [])
+        active = [p for p in pos_list if abs(float(p.get("size", 0) or 0)) > 1e-8]
+        if active:
+            _ok("get_account_positions", f"{len(active)} active position(s)")
+            for p in active:
+                cid = p.get("contractId", "?")
+                size = float(p.get("size", 0) or 0)
+                entry = float(p.get("entryPrice", 0) or 0)
+                pnl = float(p.get("unrealizedPnl", 0) or 0)
+                side = "LONG" if size > 0 else "SHORT"
+                print(f"      {cid:20s}  {side:6s}  size={size:+.4f}  entry={entry:.4f}  uPnL={pnl:.4f}")
+        else:
+            _ok("get_account_positions", "no open positions")
+    except Exception as e:
+        _fail("get_account_positions", str(e))
+
+    # --- active orders ---
+    try:
+        orders = await client.get_active_orders()
+        order_list = orders.get("orders", [])
+        if order_list:
+            _ok("get_active_orders", f"{len(order_list)} open order(s)")
+            for o in order_list[:5]:
+                cid = o.get("contractId", "?")
+                side = o.get("side", "?")
+                size = o.get("size", "?")
+                price = o.get("price", "?")
+                print(f"      {cid} {side} size={size} price={price}")
+        else:
+            _ok("get_active_orders", "no open orders")
+    except Exception as e:
+        _fail("get_active_orders", str(e))
+
+    await client.close()
+
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+
+async def _main() -> None:
+    parser = argparse.ArgumentParser(description="EdgeX adapter smoke test")
+    parser.add_argument("--public", action="store_true", help="Public data only")
+    parser.add_argument("--account", action="store_true", help="Account data only")
+    parser.add_argument("--contract", default="BTCUSD", help="Contract ID (default: BTCUSD)")
+    args = parser.parse_args()
+
+    run_all = not args.public and not args.account
+
+    if run_all or args.public:
+        await test_public(args.contract)
+
+    if run_all or args.account:
+        await test_account(args.contract)
+
+
+if __name__ == "__main__":
+    asyncio.run(_main())
