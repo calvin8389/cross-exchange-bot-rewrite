@@ -7,7 +7,7 @@ from typing import Dict, Optional, Tuple
 
 import websockets
 
-from util.retry import Backoff, sleep_backoff
+from src.util.retry import Backoff, sleep_backoff
 
 logger = logging.getLogger(__name__)
 

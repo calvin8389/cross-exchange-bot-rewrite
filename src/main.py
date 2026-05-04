@@ -7,10 +7,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from db.store import Event, Store
-from logging_ import setup_logging
-from services.lighter_ticker_service import LighterTickerService
-from services.lighter_userstats_service import LighterUserStatsService
+from src.db.store import Event, Store
+from src.logging_ import setup_logging
+from src.services.lighter_ticker_service import LighterTickerService
+from src.services.lighter_userstats_service import LighterUserStatsService
 
 logger = logging.getLogger(__name__)
 
