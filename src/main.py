@@ -7,10 +7,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from src.config import load_bot_config, load_env
+from src.core.orchestrator import Orchestrator
 from src.db.store import Event, Store
 from src.logging_ import setup_logging
-from src.services.lighter_ticker_service import LighterTickerService, StaleDataError as TickerStaleError
-from src.services.lighter_userstats_service import LighterUserStatsService, StaleDataError
 
 logger = logging.getLogger(__name__)
 
@@ -19,13 +19,34 @@ async def main() -> None:
     setup_logging()
     load_dotenv()
 
-    ws_url = os.environ.get("LIGHTER_WS_URL", "wss://mainnet.zklighter.elliot.ai/stream")
-    account_index = int(os.environ.get("ACCOUNT_INDEX", "0"))
-    market_id = int(os.environ.get("MARKET_ID", "0"))
-
     store = Store("bot.sqlite3")
     await store.start()
     await store.init_schema(Path("src/db/schema.sql").read_text(encoding="utf-8"))
+
+    # Try full orchestrator path; fall back to M1 demo if config incomplete
+    try:
+        env = load_env()
+        bot_config = load_bot_config("bot_config.json")
+        logger.info("Starting orchestrator with %d symbols", len(bot_config.symbols_to_monitor))
+
+        orch = Orchestrator(env, bot_config, store)
+        await store.kv_set("state", "BOOT")
+        await store.append_event(Event(level="info", event_type="BOOT", data={"mode": "orchestrator"}))
+        await orch.run()
+
+    except RuntimeError as e:
+        logger.warning("Config incomplete, running M1 demo mode: %s", e)
+        await _run_demo(store)
+
+
+async def _run_demo(store: Store) -> None:
+    """M1 demo fallback: print balance + ticker snapshot every 5s."""
+    from src.services.lighter_ticker_service import LighterTickerService, StaleDataError as TickerStaleError
+    from src.services.lighter_userstats_service import LighterUserStatsService, StaleDataError
+
+    ws_url = os.environ.get("LIGHTER_WS_URL", "wss://mainnet.zklighter.elliot.ai/stream")
+    account_index = int(os.environ.get("ACCOUNT_INDEX", "0"))
+    market_id = int(os.environ.get("MARKET_ID", "0"))
 
     await store.kv_set("state", "BOOT")
     await store.append_event(Event(level="info", event_type="BOOT", data={"ws_url": ws_url}))
