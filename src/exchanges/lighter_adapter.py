@@ -25,21 +25,13 @@ class LighterAdapter(ExchangeAdapter):
         self.ws_url = ws_url
         self.rest_url = rest_url
         self.account_index = account_index
-        self._session: Optional[aiohttp.ClientSession] = None
 
     # ------------------------------------------------------------------
     # lifecycle
     # ------------------------------------------------------------------
 
-    async def _ensure_session(self) -> aiohttp.ClientSession:
-        if self._session is None:
-            self._session = aiohttp.ClientSession()
-        return self._session
-
     async def close(self) -> None:
-        if self._session:
-            await self._session.close()
-            self._session = None
+        pass  # ephemeral sessions, nothing to persist
 
     # ------------------------------------------------------------------
     # Balance (ephemeral WS)
@@ -104,10 +96,9 @@ class LighterAdapter(ExchangeAdapter):
     # ------------------------------------------------------------------
 
     async def get_funding_rate(self, market_id: int) -> Optional[FundingRate]:
-        session = await self._ensure_session()
         try:
-            url = f"{self.rest_url}/api/v1/funding_rates"
-            async with session.get(url) as resp:
+            url = f"{self.rest_url}/api/v1/funding-rates"
+            async with aiohttp.ClientSession() as session, session.get(url) as resp:
                 if resp.status != 200:
                     logger.warning("Lighter funding rates HTTP %s", resp.status)
                     return None
@@ -127,10 +118,9 @@ class LighterAdapter(ExchangeAdapter):
     # ------------------------------------------------------------------
 
     async def get_open_positions(self) -> list[PositionInfo]:
-        session = await self._ensure_session()
         try:
             url = f"{self.rest_url}/api/v1/account?by=index&value={self.account_index}"
-            async with session.get(url) as resp:
+            async with aiohttp.ClientSession() as session, session.get(url) as resp:
                 if resp.status != 200:
                     logger.warning("Lighter account HTTP %s", resp.status)
                     return []
