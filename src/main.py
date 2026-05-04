@@ -5,6 +5,8 @@ import logging
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from db.store import Event, Store
 from logging_ import setup_logging
 from services.lighter_ticker_service import LighterTickerService
@@ -15,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 async def main() -> None:
     setup_logging()
+    load_dotenv()
 
     ws_url = os.environ.get("LIGHTER_WS_URL", "wss://mainnet.zklighter.elliot.ai/stream")
     account_index = int(os.environ.get("ACCOUNT_INDEX", "0"))
