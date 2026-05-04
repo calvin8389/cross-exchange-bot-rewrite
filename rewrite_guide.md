@@ -43,7 +43,12 @@
   - 退避重试（exponential backoff）
   - 降级策略（延迟下一轮、切换数据源、扩大下单跨价等）
 - 不允许在未知仓位状态下继续开新仓（必须先 ensure flat 或进入安全态）。
-- **StaleDataError 防护**：WS 服务的 getter（`get_balance`、`get_best_bid_ask`）在数据超过 `max_age_seconds` 时会抛出 `StaleDataError`。所有调用方**必须 catch 此异常**并降级处理（continue 跳过本轮、记录 warning event、或触发 WS 重连），不得让异常传播导致进程退出。主循环的 `asyncio.sleep` 间隔应**严格小于** `max_age_seconds`（建议 sleep ≤ 0.5 × max_age），为 WS 推送留出缓冲。
+- **StaleDataError 防护**：WS 服务的 getter（`get_balance`、`get_best_bid_ask`）在数据超过 `max_age_seconds` 时会抛出 `StaleDataError`。所有调用方**必须 catch 此异常**并降级处理，不得让异常传播导致进程退出。
+  - **sleep 间隔约束**：主循环的 `asyncio.sleep` 应**显著小于** `max_age_seconds`（建议取 `max_age` 的 1/2 到 1/3，但不超过 5s 上限以控制写库/日志压力）。例如：ticker `max_age=3s` → sleep 1s；userstats `max_age=10s` → sleep 5s。
+  - **降级优先级**：
+    1) 记录 `STALE_DATA` warn event（含 reason 字段）
+    2) continue 跳过本轮快照/交易
+    3) 若**连续 N 次** stale（建议 N=3），再触发对应 WS service 重启/重连，避免短暂网络抖动误伤
 
 #### 2.4 可维护性（Maintainability）
 - 策略与交易所适配层解耦（对称接口）。
@@ -205,7 +210,8 @@ src/
 
 #### `src/core/sizing.py`
 - `calculate_position_size(available_edgex, available_lighter, leverage, mid_price, safety_factor=0.95) -> float` — `min(edgex_avail, lighter_avail) * leverage * safety_factor / mid_price`
-- `unify_tick_size(size, edgex_tick, lighter_tick) -> float` — 取较粗 tick，floor 到一致精度
+- `unify_size_step(size, edgex_step, lighter_step) -> float` — 取较粗 step size（max of the two），对数量做 `floor` 保证两边仓位大小一致且不超过可用余额
+- `unify_price_tick(price, edgex_tick, lighter_tick, side) -> float` — 取较粗 price tick，对 BUY 做 `ceil`（避免限价过低无法成交），对 SELL 做 `floor`（避免限价过高无法成交）
 
 ### B.3 初学者推荐的落地顺序
 1) 先实现 Store + schema（M0）。**Store 必须同时提供 `kv_set()` 和 `kv_get()`**，后者是 M6 Recovery 的前置依赖。
@@ -230,7 +236,7 @@ src/
 - events：结构化事件流（JSON payload）
 - account_snapshots：余额/可用快照
 
-**DDL 参考（cycles / positions / account_snapshots）：**
+**DDL 参考（可按实现调整，非最终强制结构）：**
 
 ```sql
 -- 每轮交易闭环记录
@@ -274,6 +280,8 @@ CREATE TABLE IF NOT EXISTS positions (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_positions_active ON positions(is_active);
+-- 确保同时最多一条活跃仓位（SQLite 支持部分索引）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_positions_one_active ON positions(is_active) WHERE is_active = 1;
 
 -- 定期账户快照（余额/可用/投资组合值）
 CREATE TABLE IF NOT EXISTS account_snapshots (
@@ -333,6 +341,8 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_exchange_ts ON account_snapshots(exchan
 ## Part E — Lessons from Old Code（`old/` 参考代码分析）
 
 旧代码是一套已生产运行的 delta-neutral 轮换套利机器人（`old/lighter_edgex_hedge.py`，3496 行）。以下是从中提取的**应保留模式**和**应避免模式**，以及跨交易所对接的踩坑记录。
+
+> **注意**：此部分为经验总结，不代表新架构必须 1:1 复刻旧实现。所有设计决策最终以 Part A Spec 验收口径为准，旧代码位置仅作参考溯源。
 
 ### E.1 应保留的设计模式
 
@@ -905,5 +915,6 @@ python -m src.main
 ```
 
 Expected:
-- prints every 10 seconds
+- prints every 5 seconds (可调整，见 Part A 2.3 sleep 间隔约束)
 - `bot.sqlite3` keeps growing (events inserted)
+- `STALE_DATA` warn events 在数据过期时写入，连续 N 次（建议 3 次）后触发 WS 重连；正常网络下不应频繁出现
