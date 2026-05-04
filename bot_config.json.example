@@ -1,0 +1,36 @@
+{
+  "_comment": "Copy to bot_config.json and adjust.  All fields are optional — defaults shown below.",
+
+  "symbols_to_monitor": [
+    "BTC",
+    "ETH",
+    "SOL",
+    "DOGE",
+    "SUI",
+    "ARB",
+    "OP",
+    "LTC",
+    "BCH",
+    "LINK",
+    "UNI",
+    "AVAX",
+    "MATIC",
+    "ATOM",
+    "DOT"
+  ],
+
+  "quote": "USD",
+  "leverage": 3,
+  "notional_per_position": 100.0,
+
+  "hold_duration_hours": 8.0,
+  "wait_between_cycles_minutes": 5.0,
+  "check_interval_seconds": 60,
+
+  "min_net_apr_threshold": 5.0,
+  "min_volume_usd": 250000000,
+  "max_spread_pct": 0.15,
+  "cross_pct": 3.0,
+
+  "enable_stop_loss": true
+}
