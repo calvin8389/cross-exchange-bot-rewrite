@@ -188,6 +188,97 @@ async def open_position(
     )
 
 
+async def close_position(
+    edgex: ExchangeAdapter,
+    lighter: ExchangeAdapter,
+    store: Store,
+    config: ExecConfig,
+) -> None:
+    """Close the active delta-neutral position.
+
+    1. Load active position from DB
+    2. Close both legs concurrently (reduce-only)
+    3. Confirm both sides are zero — retry up to 2x with wider cross_pct
+    4. Still incomplete → ERROR
+    """
+    from src.util.time import utc_now_iso
+
+    row = await store.conn.execute("SELECT * FROM positions WHERE is_active=1")
+    pos = await row.fetchone()
+    if not pos:
+        raise RuntimeError("No active position to close")
+
+    cycle_id = pos["cycle_id"]
+    symbol = pos["symbol"]
+    edgex_side = pos["edgex_side"]
+    lighter_side = pos["lighter_side"]
+    edgex_size = pos["edgex_size"]
+    lighter_size = pos["lighter_size"]
+    edgex_entry = pos["edgex_entry_price"]
+    lighter_entry = pos["lighter_entry_price"]
+    lighter_mid = pos["lighter_market_id"]
+
+    # Closing side is opposite of opening
+    close_edgex_side = "sell" if edgex_side == "buy" else "buy"
+    close_lighter_side = "sell" if lighter_side == "buy" else "buy"
+
+    # Get fresh prices for closing
+    edgex_bba = await edgex.get_best_bid_ask(edgex_side)  # contract_id placeholder
+    lighter_bba = await lighter.get_best_bid_ask(lighter_mid)
+    edgex_close_px = cross_price(close_edgex_side, edgex_bba.bid, edgex_bba.ask, tick=0.01, cross_pct=config.cross_pct)
+    lighter_close_px = cross_price(close_lighter_side, lighter_bba.bid, lighter_bba.ask, tick=0.01, cross_pct=config.cross_pct)
+
+    await store.append_event(Event(
+        level="info", event_type="CLOSING_START", cycle_id=cycle_id,
+        data={"symbol": symbol, "edgex_side": close_edgex_side, "lighter_side": close_lighter_side},
+    ))
+
+    closed = False
+    for attempt in range(3):  # up to 2 retries
+        if attempt > 0:
+            wider_pct = config.cross_pct * (1.0 + attempt * 0.5)
+            logger.warning("Close retry %d/2 with cross_pct=%.1f%%", attempt, wider_pct)
+            edgex_close_px = cross_price(close_edgex_side, edgex_bba.bid, edgex_bba.ask, tick=0.01, cross_pct=wider_pct)
+            lighter_close_px = cross_price(close_lighter_side, lighter_bba.bid, lighter_bba.ask, tick=0.01, cross_pct=wider_pct)
+
+        await asyncio.gather(
+            edgex.close_position(symbol=symbol, side=close_edgex_side, size_base=edgex_size, price=edgex_close_px),
+            lighter.close_position(symbol=symbol, side=close_lighter_side, size_base=lighter_size, price=lighter_close_px, market_id=lighter_mid),
+            return_exceptions=True,
+        )
+
+        if await _confirm_flat(edgex, lighter, symbol, config):
+            closed = True
+            break
+
+    if not closed:
+        await store.conn.execute(
+            "UPDATE cycles SET state='ERROR', updated_at=? WHERE id=?",
+            (utc_now_iso(), cycle_id),
+        )
+        await store.conn.commit()
+        await store.append_event(Event(
+            level="error", event_type="CLOSING_FAILED", cycle_id=cycle_id,
+            data={"reason": "Position not flat after retries"},
+        ))
+        raise RuntimeError("Close incomplete after 3 attempts — ESCALATE TO ERROR")
+
+    # Mark position inactive
+    await store.conn.execute(
+        "UPDATE positions SET is_active=0, updated_at=? WHERE id=?",
+        (utc_now_iso(), pos["id"]),
+    )
+    await store.conn.execute(
+        "UPDATE cycles SET state='CLOSED', closed_at=?, updated_at=? WHERE id=?",
+        (utc_now_iso(), utc_now_iso(), cycle_id),
+    )
+    await store.conn.commit()
+    await store.append_event(Event(
+        level="info", event_type="CLOSING_DONE", cycle_id=cycle_id,
+        data={"symbol": symbol},
+    ))
+
+
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
@@ -214,6 +305,35 @@ async def _confirm_positions(
         l_match = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in l_pos)
 
         if e_match and l_match:
+            return True
+
+        await asyncio.sleep(config.confirm_poll_interval)
+
+    return False
+
+
+async def _confirm_flat(
+    edgex: ExchangeAdapter,
+    lighter: ExchangeAdapter,
+    symbol: str,
+    config: ExecConfig,
+) -> bool:
+    """Poll until both exchange positions are zero or timeout."""
+    deadline = time.time() + config.confirm_timeout_seconds
+    while time.time() < deadline:
+        try:
+            e_pos, l_pos = await asyncio.gather(
+                edgex.get_open_positions(),
+                lighter.get_open_positions(),
+            )
+        except Exception:
+            await asyncio.sleep(config.confirm_poll_interval)
+            continue
+
+        e_match = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in e_pos)
+        l_match = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in l_pos)
+
+        if not e_match and not l_match:
             return True
 
         await asyncio.sleep(config.confirm_poll_interval)
