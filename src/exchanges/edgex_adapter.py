@@ -64,33 +64,31 @@ class EdgeXAdapter(ExchangeAdapter):
     # ------------------------------------------------------------------
 
     async def get_best_bid_ask(self, market_id: int) -> BestBidAsk:
-        """Fetch best bid/ask from EdgeX order book via REST.
+        """Fetch best bid/ask from EdgeX order book depth.
 
-        Note: ``market_id`` is the EdgeX **contract ID string** (e.g. "BTCUSD"),
+        Note: ``market_id`` is the EdgeX **contract ID string** (e.g. "10000001"),
         not a numeric ID.
         """
         session = await self._ensure_session()
-        contract_id = str(market_id)  # EdgeX contract_id must be str
-        url = f"{self.base_url}/api/v1/public/orderbook/{contract_id}"
+        contract_id = str(market_id)
+        url = f"{self.base_url}/api/v1/public/quote/getDepth"
+        params = {"contractId": contract_id, "level": "15"}
         try:
-            async with session.get(url) as resp:
+            async with session.get(url, params=params) as resp:
                 if resp.status != 200:
                     raise RuntimeError(f"EdgeX order book HTTP {resp.status}")
                 data = await resp.json()
-                bids = data.get("bids", [])
-                asks = data.get("asks", [])
+                ob_list = data.get("data", [{}])
+                if not ob_list:
+                    raise RuntimeError("EdgeX order book empty, no last price")
+                ob = ob_list[0]
+                bids = ob.get("bids", [])
+                asks = ob.get("asks", [])
                 if not bids or not asks:
-                    # fallback: use last price to synthesise bid/ask
-                    last = float(data.get("lastPrice", 0) or 0)
-                    if last > 0:
-                        return BestBidAsk(
-                            bid=last * 0.9995,
-                            ask=last * 1.0005,
-                        )
                     raise RuntimeError("EdgeX order book empty, no last price")
                 return BestBidAsk(
-                    bid=float(bids[0][0]),
-                    ask=float(asks[0][0]),
+                    bid=float(bids[0].get("price", 0)),
+                    ask=float(asks[0].get("price", 0)),
                 )
         except Exception as e:
             logger.warning("EdgeX order book fetch failed: %s", e)
@@ -101,20 +99,26 @@ class EdgeXAdapter(ExchangeAdapter):
     # ------------------------------------------------------------------
 
     async def get_funding_rate(self, market_id: int) -> Optional[FundingRate]:
-        """Fetch EdgeX funding rate from quote API.
+        """Fetch EdgeX funding rate from ticker API.
 
-        ``market_id`` is the contract name string (e.g. "BTCUSD").
+        ``market_id`` is the contract ID string (e.g. "10000001").
         """
         session = await self._ensure_session()
         contract = str(market_id)
-        url = f"{self.base_url}/api/v1/public/quote/{contract}"
+        url = f"{self.base_url}/api/v1/public/quote/getTicker"
+        params = {"contractId": contract}
         try:
-            async with session.get(url) as resp:
+            async with session.get(url, params=params) as resp:
                 if resp.status != 200:
                     logger.warning("EdgeX quote HTTP %s", resp.status)
                     return None
                 data = await resp.json()
-                rate = float(data.get("fundingRate", 0) or 0)
+                ticker_list = data.get("data", [])
+                if ticker_list:
+                    ticker = ticker_list[0]
+                else:
+                    ticker = {}
+                rate = float(ticker.get("fundingRate", 0) or 0)
                 return FundingRate(rate=rate, apr=rate * 365 * 24)
         except Exception as e:
             logger.warning("EdgeX funding rate fetch failed: %s", e)

@@ -66,36 +66,61 @@ async def test_public(contract: str) -> None:
     # --- metadata (market list) ---
     try:
         meta = await client.get_metadata()
-        contracts = meta.get("contracts", [])
+        contracts = meta.get("data", {}).get("contractList", [])
         _ok("get_metadata", f"{len(contracts)} contracts loaded")
 
         for c in contracts[:5]:
             cid = c.get("contractId", "?")
+            name = c.get("contractName", "?")
             tick = c.get("tickSize", "?")
             step = c.get("stepSize", "?")
-            print(f"      {cid:20s}  tick={tick}\tstep={step}")
+            print(f"      {cid:>10s}  {name:20s}  tick={tick}\tstep={step}")
         if len(contracts) > 5:
             print(f"      ... and {len(contracts) - 5} more")
 
-        target = next((c for c in contracts if c.get("contractId") == contract), None)
+        target = next((c for c in contracts if c.get("contractName") == contract), None)
         if target:
-            _ok("contract lookup", f"{contract} → tick={target['tickSize']} step={target['stepSize']}")
+            _ok("contract lookup", f"{contract} → id={target['contractId']} tick={target['tickSize']} step={target['stepSize']}")
+            contract_id = target["contractId"]
         else:
             _fail("contract lookup", f"{contract} not found in metadata")
+            contract_id = None
     except Exception as e:
         _fail("get_metadata", str(e))
+        contract_id = None
 
-    # --- 24h quote ---
-    try:
-        quote = await client.get_24_hour_quote(contract)
-        last = quote.get("lastPrice", "N/A")
-        bid = quote.get("bidPrice", "N/A")
-        ask = quote.get("askPrice", "N/A")
-        vol = quote.get("volume", "N/A")
-        funding = quote.get("fundingRate", "N/A")
-        _ok("get_24_hour_quote", f"last={last}  bid={bid}  ask={ask}  vol={vol}  funding={funding}")
-    except Exception as e:
-        _fail("get_24_hour_quote", str(e))
+    # --- 24h ticker ---
+    if contract_id:
+        try:
+            quote = await client.get_24_hour_quote(contract_id)
+            data = quote.get("data", [])
+            if isinstance(data, list) and data:
+                ticker = data[0]
+            else:
+                ticker = data if isinstance(data, dict) else {}
+            last = ticker.get("lastPrice", "N/A")
+            mark = ticker.get("markPrice", "N/A")
+            vol = ticker.get("value", "N/A")
+            funding = ticker.get("fundingRate", "N/A")
+            _ok("get_24_hour_quote", f"last={last}  mark={mark}  vol={vol}  funding={funding}")
+        except Exception as e:
+            _fail("get_24_hour_quote", str(e))
+
+    # --- order book (bid/ask) ---
+    if contract_id:
+        try:
+            from edgex_sdk import GetOrderBookDepthParams
+            depth = await client.quote.get_order_book_depth(
+                GetOrderBookDepthParams(contract_id=contract_id, limit=15)
+            )
+            ob_data = depth.get("data", [{}])[0]
+            bids = ob_data.get("bids", [])
+            asks = ob_data.get("asks", [])
+            bid = bids[0].get("price", "N/A") if bids else "N/A"
+            ask = asks[0].get("price", "N/A") if asks else "N/A"
+            _ok("order_book_depth", f"bid={bid}  ask={ask}")
+        except Exception as e:
+            _fail("order_book_depth", str(e))
 
     await client.close()
 
@@ -112,6 +137,8 @@ async def test_account(contract: str) -> None:
     base_url = _get_env_or_die("EDGEX_BASE_URL")
     account_id = int(_get_env_or_die("EDGEX_ACCOUNT_ID"))
     private_key = _get_env_or_die("EDGEX_STARK_PRIVATE_KEY")
+    if private_key.startswith("0x") or private_key.startswith("0X"):
+        private_key = private_key[2:]
 
     client = Client(
         base_url=base_url,
@@ -122,8 +149,10 @@ async def test_account(contract: str) -> None:
     # --- balance ---
     try:
         asset = await client.get_account_asset()
-        equity = float(asset.get("totalEquity", 0))
-        avail = float(asset.get("availableAmount", 0))
+        asset_data = asset.get("data", {})
+        collateral_list = asset_data.get("collateralAssetModelList", [])
+        equity = sum(float(a.get("totalEquity", 0) or 0) for a in collateral_list)
+        avail = sum(float(a.get("availableAmount", 0) or 0) for a in collateral_list)
         _ok("get_account_asset", f"totalEquity={equity:.2f}  available={avail:.2f}")
     except Exception as e:
         _fail("get_account_asset", str(e))
@@ -131,7 +160,8 @@ async def test_account(contract: str) -> None:
     # --- positions ---
     try:
         positions = await client.get_account_positions()
-        pos_list = positions.get("positions", [])
+        pos_data = positions.get("data", {})
+        pos_list = pos_data.get("positionAssetList", [])
         active = [p for p in pos_list if abs(float(p.get("size", 0) or 0)) > 1e-8]
         if active:
             _ok("get_account_positions", f"{len(active)} active position(s)")
@@ -149,8 +179,10 @@ async def test_account(contract: str) -> None:
 
     # --- active orders ---
     try:
-        orders = await client.get_active_orders()
-        order_list = orders.get("orders", [])
+        from edgex_sdk import GetActiveOrderParams
+        orders = await client.get_active_orders(GetActiveOrderParams())
+        order_data = orders.get("data", {})
+        order_list = order_data.get("orderList", order_data.get("orders", []))
         if order_list:
             _ok("get_active_orders", f"{len(order_list)} open order(s)")
             for o in order_list[:5]:
