@@ -31,6 +31,13 @@ class PositionInfo:
     unrealized_pnl: float
 
 
+@dataclass
+class MarketDetails:
+    market_id: int | str   # int for Lighter, str for EdgeX
+    price_tick: float
+    size_step: float
+
+
 class ExchangeAdapter(ABC):
     @abstractmethod
     async def get_balance(self) -> Balance: ...
@@ -43,6 +50,21 @@ class ExchangeAdapter(ABC):
 
     @abstractmethod
     async def get_open_positions(self) -> list[PositionInfo]: ...
+
+    @abstractmethod
+    async def get_market_details(self, symbol: str) -> MarketDetails: ...
+
+    @abstractmethod
+    async def place_order(
+        self, symbol: str, side: str, size_base: float,
+        price: float, market_id: int | str | None = None,
+    ) -> Optional[str]: ...
+
+    @abstractmethod
+    async def close_position(
+        self, symbol: str, side: str, size_base: float,
+        price: float, market_id: int | str | None = None,
+    ) -> bool: ...
 
     @abstractmethod
     async def close(self) -> None: ...

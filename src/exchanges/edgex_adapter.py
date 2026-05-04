@@ -5,7 +5,7 @@ from typing import Optional
 
 import aiohttp
 
-from src.exchanges.base import Balance, BestBidAsk, ExchangeAdapter, FundingRate, PositionInfo
+from src.exchanges.base import Balance, BestBidAsk, ExchangeAdapter, FundingRate, MarketDetails, PositionInfo
 
 logger = logging.getLogger(__name__)
 
@@ -150,3 +150,74 @@ class EdgeXAdapter(ExchangeAdapter):
         except Exception as e:
             logger.warning("EdgeX positions fetch failed: %s", e)
             return []
+
+    # ------------------------------------------------------------------
+    # Market details
+    # ------------------------------------------------------------------
+
+    async def get_market_details(self, symbol: str) -> MarketDetails:
+        contract_id = f"{symbol.upper()}USD"
+        return MarketDetails(market_id=contract_id, price_tick=0.01, size_step=0.001)
+
+    # ------------------------------------------------------------------
+    # Order placement (requires edgex-python-sdk)
+    # ------------------------------------------------------------------
+
+    async def place_order(
+        self, symbol: str, side: str, size_base: float,
+        price: float, market_id: int | str | None = None,
+    ) -> Optional[str]:
+        try:
+            from edgex_sdk import Client as EdgeXClient, CreateOrderParams, OrderSide, OrderType, TimeInForce
+
+            client = EdgeXClient(
+                base_url=self.base_url,
+                account_id=self.account_id,
+                stark_private_key=self.private_key,
+            )
+            contract_id = str(market_id) if market_id else f"{symbol.upper()}USD"
+            side_enum = OrderSide.BUY if side == "buy" else OrderSide.SELL
+            params = CreateOrderParams(
+                contract_id=str(contract_id),
+                side=side_enum,
+                order_type=OrderType.LIMIT,
+                price=price,
+                size=size_base,
+                time_in_force=TimeInForce.GOOD_TILL_TIME,
+            )
+            result = await client.create_order(params)
+            await client.close()
+            return result.get("orderId") if result else None
+        except ImportError:
+            logger.warning("edgex-python-sdk not installed — order placement unavailable")
+            return None
+
+    async def close_position(
+        self, symbol: str, side: str, size_base: float,
+        price: float, market_id: int | str | None = None,
+    ) -> bool:
+        try:
+            from edgex_sdk import Client as EdgeXClient, CreateOrderParams, OrderSide, OrderType, TimeInForce
+
+            client = EdgeXClient(
+                base_url=self.base_url,
+                account_id=self.account_id,
+                stark_private_key=self.private_key,
+            )
+            contract_id = str(market_id) if market_id else f"{symbol.upper()}USD"
+            side_enum = OrderSide.BUY if side == "buy" else OrderSide.SELL
+            params = CreateOrderParams(
+                contract_id=str(contract_id),
+                side=side_enum,
+                order_type=OrderType.LIMIT,
+                price=price,
+                size=size_base,
+                time_in_force=TimeInForce.GOOD_TILL_TIME,
+                reduce_only=True,
+            )
+            result = await client.create_order(params)
+            await client.close()
+            return result is not None
+        except ImportError:
+            logger.warning("edgex-python-sdk not installed — close unavailable")
+            return False
