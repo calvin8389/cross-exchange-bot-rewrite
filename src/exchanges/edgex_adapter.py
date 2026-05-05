@@ -11,10 +11,10 @@ logger = logging.getLogger(__name__)
 
 
 class EdgeXAdapter(ExchangeAdapter):
-    """Minimal EdgeX REST adapter via aiohttp.
+    """EdgeX REST adapter via aiohttp.
 
-    In later milestones this will be backed by ``edgex-python-sdk``.
-    Current implementation uses EdgeX REST endpoints directly.
+    Public endpoints use direct REST calls.  Private endpoints (balance,
+    positions, order placement) use the edgex-python-sdk when available.
     """
 
     def __init__(self, base_url: str, account_id: int, private_key: str):
@@ -22,6 +22,7 @@ class EdgeXAdapter(ExchangeAdapter):
         self.account_id = account_id       # MUST be int (SDK requirement)
         self.private_key = private_key
         self._session: Optional[aiohttp.ClientSession] = None
+        self._contracts_by_name: dict[str, str] = {}  # "BTC" → "10000001"
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None:
@@ -32,6 +33,43 @@ class EdgeXAdapter(ExchangeAdapter):
         if self._session:
             await self._session.close()
             self._session = None
+
+    async def _load_metadata(self) -> dict[str, str]:
+        """Lazy-load EdgeX contract metadata. Returns {name: contract_id}."""
+        if self._contracts_by_name:
+            return self._contracts_by_name
+
+        session = await self._ensure_session()
+        url = f"{self.base_url}/api/v1/public/meta/getMetaData"
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"EdgeX metadata HTTP {resp.status}")
+            data = await resp.json()
+
+        for c in data.get("data", {}).get("contractList", []):
+            name = c.get("contractName", "")
+            cid = c.get("contractId", "")
+            if name and cid:
+                # Store both full name ("BTCUSD") and base symbol ("BTC")
+                self._contracts_by_name[name.upper()] = cid
+                if name.endswith("USD") and len(name) > 3:
+                    base = name[:-3].upper()
+                    if base not in self._contracts_by_name:
+                        self._contracts_by_name[base] = cid
+        return self._contracts_by_name
+
+    async def resolve_contract_id(self, symbol: str) -> str:
+        """Resolve a symbol (e.g. 'BTC' or 'BTCUSD') to a numeric contract ID."""
+        meta = await self._load_metadata()
+        key = symbol.upper()
+        if key in meta:
+            return meta[key]
+        # Try with USD suffix
+        if not key.endswith("USD"):
+            key_usd = f"{key}USD"
+            if key_usd in meta:
+                return meta[key_usd]
+        raise ValueError(f"Symbol {symbol} not found in EdgeX metadata")
 
     # ------------------------------------------------------------------
     # Balance
@@ -119,7 +157,7 @@ class EdgeXAdapter(ExchangeAdapter):
                 else:
                     ticker = {}
                 rate = float(ticker.get("fundingRate", 0) or 0)
-                return FundingRate(rate=rate, apr=rate * 365 * 24)
+                return FundingRate(rate=rate, apr=rate * 365 * 24 * 100)
         except Exception as e:
             logger.warning("EdgeX funding rate fetch failed: %s", e)
             return None
@@ -160,7 +198,25 @@ class EdgeXAdapter(ExchangeAdapter):
     # ------------------------------------------------------------------
 
     async def get_market_details(self, symbol: str) -> MarketDetails:
-        contract_id = f"{symbol.upper()}USD"
+        """Resolve symbol to contract metadata via EdgeX metadata API."""
+        meta = await self._load_metadata()
+        contract_id = await self.resolve_contract_id(symbol)
+
+        # Fetch the full contract info from the cached metadata
+        session = await self._ensure_session()
+        url = f"{self.base_url}/api/v1/public/meta/getMetaData"
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"EdgeX metadata HTTP {resp.status}")
+            data = await resp.json()
+
+        for c in data.get("data", {}).get("contractList", []):
+            if c.get("contractId") == contract_id:
+                price_tick = float(c.get("tickSize", 0.01) or 0.01)
+                size_step = float(c.get("stepSize", 0.001) or 0.001)
+                return MarketDetails(market_id=contract_id, price_tick=price_tick, size_step=size_step)
+
+        # Fallback
         return MarketDetails(market_id=contract_id, price_tick=0.01, size_step=0.001)
 
     # ------------------------------------------------------------------

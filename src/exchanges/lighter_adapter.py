@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 import os
 import time
 from typing import Optional
 
 import aiohttp
-import websockets
 
 from src.exchanges.base import Balance, BestBidAsk, ExchangeAdapter, FundingRate, MarketDetails, PositionInfo
 
@@ -16,91 +13,91 @@ logger = logging.getLogger(__name__)
 
 
 class LighterAdapter(ExchangeAdapter):
-    """Minimal Lighter REST/WS adapter.
+    """Lighter REST adapter backed by aiohttp.
 
-    Uses ephemeral WebSocket connections for balance / order-book snapshots
-    (no SDK dependency).  In later milestones the persistent WS services in
-    ``src/services/`` can be injected to avoid per-call connection overhead.
+    All public + account endpoints use REST.  Order placement uses the
+    Lighter SDK SignerClient (imported lazily to keep the adapter usable
+    without the SDK).
     """
 
     def __init__(self, ws_url: str, rest_url: str, account_index: int):
-        self.ws_url = ws_url
-        self.rest_url = rest_url
+        self.ws_url = ws_url   # kept for compatibility; no longer used internally
+        self.rest_url = rest_url.rstrip("/")
         self.account_index = account_index
+        self._session: Optional[aiohttp.ClientSession] = None
 
     # ------------------------------------------------------------------
     # lifecycle
     # ------------------------------------------------------------------
 
+    async def _ensure_session(self) -> aiohttp.ClientSession:
+        if self._session is None:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
     async def close(self) -> None:
-        pass  # ephemeral sessions, nothing to persist
+        if self._session:
+            await self._session.close()
+            self._session = None
 
     # ------------------------------------------------------------------
-    # Balance (ephemeral WS)
+    # Balance (REST)
     # ------------------------------------------------------------------
 
     async def get_balance(self) -> Balance:
-        sub = {"type": "subscribe", "channel": f"user_stats/{self.account_index}"}
-        timeout = 15.0
+        session = await self._ensure_session()
+        url = f"{self.rest_url}/api/v1/account"
+        params = {"by": "index", "value": str(self.account_index)}
         try:
-            async with websockets.connect(self.ws_url) as ws:
-                await ws.send(json.dumps(sub))
-                deadline = asyncio.get_running_loop().time() + timeout
-                while asyncio.get_running_loop().time() < deadline:
-                    remaining = deadline - asyncio.get_running_loop().time()
-                    if remaining <= 0:
-                        break
-                    raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
-                    msg = json.loads(raw)
-                    t = msg.get("type")
-                    if t in ("update/user_stats", "subscribed/user_stats"):
-                        stats = msg.get("stats") or {}
-                        avail = float(stats.get("available_balance", 0) or 0)
-                        port = float(stats.get("portfolio_value", 0) or 0)
-                        return Balance(total_equity=port, available=avail)
-        except asyncio.TimeoutError:
-            pass
-        raise RuntimeError("Lighter balance: timeout waiting for user_stats")
+            async with session.get(url, params=params) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(f"Lighter account HTTP {resp.status}")
+                data = await resp.json()
+                accounts = data.get("accounts", [])
+                if not accounts:
+                    raise RuntimeError("Lighter balance: no account returned")
+                acc = accounts[0]
+                avail = float(acc.get("available_balance", 0))
+                total = float(acc.get("total_asset_value", acc.get("collateral", 0)))
+                return Balance(total_equity=total, available=avail)
+        except Exception as e:
+            logger.warning("Lighter balance fetch failed: %s", e)
+            raise
 
     # ------------------------------------------------------------------
-    # Best bid/ask (ephemeral WS order-book snapshot)
+    # Best bid/ask (REST order book snapshot)
     # ------------------------------------------------------------------
 
     async def get_best_bid_ask(self, market_id: int) -> BestBidAsk:
-        sub = {"type": "subscribe", "channel": f"order_book/{market_id}"}
-        timeout = 15.0
+        session = await self._ensure_session()
+        url = f"{self.rest_url}/api/v1/orderBookOrders"
+        params = {"market_id": str(market_id), "limit": "1"}
         try:
-            async with websockets.connect(self.ws_url) as ws:
-                await ws.send(json.dumps(sub))
-                deadline = asyncio.get_running_loop().time() + timeout
-                while asyncio.get_running_loop().time() < deadline:
-                    remaining = deadline - asyncio.get_running_loop().time()
-                    if remaining <= 0:
-                        break
-                    raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
-                    msg = json.loads(raw)
-                    t = msg.get("type")
-                    if t in ("update/order_book", "subscribed/order_book"):
-                        ob = msg.get("order_book") or {}
-                        bids = ob.get("bids", [])
-                        asks = ob.get("asks", [])
-                        if bids and asks:
-                            return BestBidAsk(
-                                bid=float(bids[0]["price"]),
-                                ask=float(asks[0]["price"]),
-                            )
-        except asyncio.TimeoutError:
-            pass
-        raise RuntimeError(f"Lighter order book: timeout for market {market_id}")
+            async with session.get(url, params=params) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(f"Lighter order book HTTP {resp.status}")
+                data = await resp.json()
+                bids = data.get("bids", [])
+                asks = data.get("asks", [])
+                if not bids or not asks:
+                    raise RuntimeError(f"Lighter order book empty for market {market_id}")
+                return BestBidAsk(
+                    bid=float(bids[0]["price"]),
+                    ask=float(asks[0]["price"]),
+                )
+        except Exception as e:
+            logger.warning("Lighter order book fetch failed: %s", e)
+            raise
 
     # ------------------------------------------------------------------
     # Funding rate (REST)
     # ------------------------------------------------------------------
 
     async def get_funding_rate(self, market_id: int) -> Optional[FundingRate]:
+        session = await self._ensure_session()
+        url = f"{self.rest_url}/api/v1/funding-rates"
         try:
-            url = f"{self.rest_url}/api/v1/funding-rates"
-            async with aiohttp.ClientSession() as session, session.get(url) as resp:
+            async with session.get(url) as resp:
                 if resp.status != 200:
                     logger.warning("Lighter funding rates HTTP %s", resp.status)
                     return None
@@ -109,7 +106,7 @@ class LighterAdapter(ExchangeAdapter):
                 for r in rates:
                     if int(r.get("market_id", -1)) == market_id:
                         rate = float(r.get("rate", 0))
-                        return FundingRate(rate=rate, apr=rate * 365 * 24)
+                        return FundingRate(rate=rate, apr=rate * 365 * 24 * 100)
                 return None
         except Exception as e:
             logger.warning("Lighter funding rate fetch failed: %s", e)
@@ -120,9 +117,11 @@ class LighterAdapter(ExchangeAdapter):
     # ------------------------------------------------------------------
 
     async def get_open_positions(self) -> list[PositionInfo]:
+        session = await self._ensure_session()
+        url = f"{self.rest_url}/api/v1/account"
+        params = {"by": "index", "value": str(self.account_index)}
         try:
-            url = f"{self.rest_url}/api/v1/account?by=index&value={self.account_index}"
-            async with aiohttp.ClientSession() as session, session.get(url) as resp:
+            async with session.get(url, params=params) as resp:
                 if resp.status != 200:
                     logger.warning("Lighter account HTTP %s", resp.status)
                     return []
@@ -148,24 +147,28 @@ class LighterAdapter(ExchangeAdapter):
             return []
 
     # ------------------------------------------------------------------
-    # Market details (REST or ephemeral WS)
+    # Market details (REST)
     # ------------------------------------------------------------------
 
     async def get_market_details(self, symbol: str) -> MarketDetails:
         """Return Lighter market_id, price_tick, size_step for a symbol."""
-        # Use REST order-books list to resolve symbol → market metadata
+        session = await self._ensure_session()
         url = f"{self.rest_url}/api/v1/orderBooks"
-        async with aiohttp.ClientSession() as session, session.get(url) as resp:
-            if resp.status != 200:
-                raise RuntimeError(f"Lighter orderBooks HTTP {resp.status}")
-            data = await resp.json()
-            for ob in data.get("order_books", []):
-                if ob.get("symbol", "").upper() == symbol.upper():
-                    market_id = ob["market_id"]
-                    price_tick = 10 ** -ob.get("supported_price_decimals", 2)
-                    size_step = 10 ** -ob.get("supported_size_decimals", 2)
-                    return MarketDetails(market_id=market_id, price_tick=price_tick, size_step=size_step)
-        raise ValueError(f"Symbol {symbol} not found on Lighter")
+        try:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(f"Lighter orderBooks HTTP {resp.status}")
+                data = await resp.json()
+                for ob in data.get("order_books", []):
+                    if ob.get("symbol", "").upper() == symbol.upper():
+                        market_id = ob["market_id"]
+                        price_tick = 10 ** -ob.get("supported_price_decimals", 2)
+                        size_step = 10 ** -ob.get("supported_size_decimals", 2)
+                        return MarketDetails(market_id=market_id, price_tick=price_tick, size_step=size_step)
+            raise ValueError(f"Symbol {symbol} not found on Lighter")
+        except Exception as e:
+            logger.warning("Lighter market details fetch failed: %s", e)
+            raise
 
     # ------------------------------------------------------------------
     # Order placement (Lighter SDK)

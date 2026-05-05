@@ -103,42 +103,29 @@ async def _fetch_lighter(adapter: ExchangeAdapter, symbol: str):
 
     Returns (FundingRate | None, BestBidAsk | None).
     """
-    # Lighter identifies markets by numeric ID.  For the scanner we need
-    # symbol→market_id mapping.  In M3 we use a hard-coded lookup; M4+ will
-    # use the adapter's market-metadata method.
-    market_id = _SYMBOL_TO_LIGHTER_MARKET.get(symbol.upper())
-    if market_id is None:
-        logger.warning("Unknown Lighter symbol: %s", symbol)
+    try:
+        md = await adapter.get_market_details(symbol)
+    except Exception as e:
+        logger.warning("Lighter market_details failed for %s: %s", symbol, e)
         return None, None
 
     fr, bba = await asyncio.gather(
-        adapter.get_funding_rate(market_id),
-        adapter.get_best_bid_ask(market_id),
+        adapter.get_funding_rate(md.market_id),
+        adapter.get_best_bid_ask(md.market_id),
     )
     return fr, bba
 
 
 async def _fetch_edgex(adapter: ExchangeAdapter, symbol: str):
-    """Fetch EdgeX funding rate + best bid/ask for a symbol.
+    """Fetch EdgeX funding rate + best bid/ask for a symbol."""
+    try:
+        md = await adapter.get_market_details(symbol)
+    except Exception as e:
+        logger.warning("EdgeX market_details failed for %s: %s", symbol, e)
+        return None, None
 
-    EdgeX identifies contracts by "SYMBOLQUOTE" string (e.g. "BTCUSD").
-    """
-    contract_id = f"{symbol.upper()}USD"
     fr, bba = await asyncio.gather(
-        adapter.get_funding_rate(contract_id),
-        adapter.get_best_bid_ask(contract_id),
+        adapter.get_funding_rate(md.market_id),
+        adapter.get_best_bid_ask(md.market_id),
     )
     return fr, bba
-
-
-# ---------------------------------------------------------------------------
-# Symbol → Lighter market_id mapping (subset — expand as needed)
-# ---------------------------------------------------------------------------
-
-_SYMBOL_TO_LIGHTER_MARKET: dict[str, int] = {
-    "BTC": 1,
-    "ETH": 0,
-    "SOL": 2,
-    "DOGE": 3,
-    "SUI": 16,
-}
