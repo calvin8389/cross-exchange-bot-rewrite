@@ -136,9 +136,9 @@ async def _fetch_edgex(adapter: ExchangeAdapter, symbol: str):
 # ---------------------------------------------------------------------------
 
 _SYMBOL_TO_LIGHTER_MARKET: dict[str, int] = {
-    "BTC": 0,
-    "ETH": 1,
+    "BTC": 1,
+    "ETH": 0,
     "SOL": 2,
     "DOGE": 3,
-    "SUI": 5,
+    "SUI": 16,
 }
