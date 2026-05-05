@@ -53,8 +53,14 @@ async def open_position(
         config.leverage, mid, config.safety_factor,
     )
 
-    # Unify across exchanges (use placeholder steps — adapters will provide real values)
-    size_base = unify_size_step(size_base, edgex_step=0.01, lighter_step=0.01)
+    # Resolve market metadata for tick/step unification
+    edgex_md = await edgex.get_market_details(opp.symbol)
+    lighter_md = await lighter.get_market_details(opp.symbol)
+    edgex_market_id = edgex_md.market_id
+    lighter_market_id = lighter_md.market_id
+
+    # Unify size across exchanges
+    size_base = unify_size_step(size_base, edgex_md.size_step, lighter_md.size_step)
 
     # Determine which exchange takes which side
     if opp.direction == "long_edgex_short_lighter":
@@ -63,8 +69,9 @@ async def open_position(
         edgex_side, lighter_side = "sell", "buy"
 
     # Prices (aggressive to ensure fill)
-    edgex_price = cross_price(edgex_side, opp.edgex_bid, opp.edgex_ask, tick=0.01, cross_pct=config.cross_pct)
-    lighter_price = cross_price(lighter_side, opp.lighter_bid, opp.lighter_ask, tick=0.01, cross_pct=config.cross_pct)
+    tick = max(edgex_md.price_tick, lighter_md.price_tick)
+    edgex_price = cross_price(edgex_side, opp.edgex_bid, opp.edgex_ask, tick=tick, cross_pct=config.cross_pct)
+    lighter_price = cross_price(lighter_side, opp.lighter_bid, opp.lighter_ask, tick=tick, cross_pct=config.cross_pct)
 
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -96,17 +103,17 @@ async def open_position(
             side=edgex_side,
             size_base=size_base,
             price=edgex_price,
+            market_id=edgex_market_id,
         )
 
     async def _place_lighter():
         nonlocal lighter_order_id
-        market_id = _symbol_to_lighter_market(opp.symbol)
         lighter_order_id = await lighter.place_order(
             symbol=opp.symbol,
             side=lighter_side,
             size_base=size_base,
             price=lighter_price,
-            market_id=market_id,
+            market_id=lighter_market_id,
         )
 
     results = await asyncio.gather(
@@ -122,7 +129,7 @@ async def open_position(
         await lighter.close_position(
             symbol=opp.symbol, side="buy" if lighter_side == "sell" else "sell",
             size_base=size_base, price=lighter_price,
-            market_id=_symbol_to_lighter_market(opp.symbol),
+            market_id=lighter_market_id,
         )
         await _fail_cycle(store, cycle_id, "EdgeX leg failed")
         raise RuntimeError(f"EdgeX leg failed, Lighter rolled back: {edgex_err}")
@@ -147,7 +154,7 @@ async def open_position(
         logger.error("Position confirmation failed, attempting emergency close")
         await asyncio.gather(
             edgex.close_position(symbol=opp.symbol, side="buy" if edgex_side == "sell" else "sell", size_base=size_base, price=edgex_price),
-            lighter.close_position(symbol=opp.symbol, side="buy" if lighter_side == "sell" else "sell", size_base=size_base, price=lighter_price, market_id=_symbol_to_lighter_market(opp.symbol)),
+            lighter.close_position(symbol=opp.symbol, side="buy" if lighter_side == "sell" else "sell", size_base=size_base, price=lighter_price, market_id=lighter_market_id),
             return_exceptions=True,
         )
         await _fail_cycle(store, cycle_id, "Confirmation failed")
@@ -162,7 +169,7 @@ async def open_position(
            VALUES(?,?,1,?,?,?,?,?,?,?,?,?)""",
         (cycle_id, opp.symbol,
          edgex_side, size_base, edgex_price,
-         _symbol_to_lighter_market(opp.symbol), lighter_side, size_base, lighter_price,
+         lighter_market_id, lighter_side, size_base, lighter_price,
          utc_now_iso(), utc_now_iso()),
     )
     await store.conn.commit()
@@ -216,17 +223,24 @@ async def close_position(
     lighter_size = pos["lighter_size"]
     edgex_entry = pos["edgex_entry_price"]
     lighter_entry = pos["lighter_entry_price"]
-    lighter_mid = pos["lighter_market_id"]
 
     # Closing side is opposite of opening
     close_edgex_side = "sell" if edgex_side == "buy" else "buy"
     close_lighter_side = "sell" if lighter_side == "buy" else "buy"
 
     # Get fresh prices for closing
-    edgex_bba = await edgex.get_best_bid_ask(edgex_side)  # contract_id placeholder
-    lighter_bba = await lighter.get_best_bid_ask(lighter_mid)
-    edgex_close_px = cross_price(close_edgex_side, edgex_bba.bid, edgex_bba.ask, tick=0.01, cross_pct=config.cross_pct)
-    lighter_close_px = cross_price(close_lighter_side, lighter_bba.bid, lighter_bba.ask, tick=0.01, cross_pct=config.cross_pct)
+    edgex_md = await edgex.get_market_details(symbol)
+    lighter_md = await lighter.get_market_details(symbol)
+    edgex_market_id = edgex_md.market_id
+    lighter_market_id = lighter_md.market_id
+
+    edgex_bba, lighter_bba = await asyncio.gather(
+        edgex.get_best_bid_ask(edgex_market_id),
+        lighter.get_best_bid_ask(lighter_market_id),
+    )
+    tick = max(edgex_md.price_tick, lighter_md.price_tick)
+    edgex_close_px = cross_price(close_edgex_side, edgex_bba.bid, edgex_bba.ask, tick=tick, cross_pct=config.cross_pct)
+    lighter_close_px = cross_price(close_lighter_side, lighter_bba.bid, lighter_bba.ask, tick=tick, cross_pct=config.cross_pct)
 
     await store.append_event(Event(
         level="info", event_type="CLOSING_START", cycle_id=cycle_id,
@@ -243,7 +257,7 @@ async def close_position(
 
         await asyncio.gather(
             edgex.close_position(symbol=symbol, side=close_edgex_side, size_base=edgex_size, price=edgex_close_px),
-            lighter.close_position(symbol=symbol, side=close_lighter_side, size_base=lighter_size, price=lighter_close_px, market_id=lighter_mid),
+            lighter.close_position(symbol=symbol, side=close_lighter_side, size_base=lighter_size, price=lighter_close_px, market_id=lighter_market_id),
             return_exceptions=True,
         )
 
@@ -353,8 +367,3 @@ async def _fail_cycle(store: Store, cycle_id: int, reason: str) -> None:
         level="error", event_type="OPENING_ROLLBACK", cycle_id=cycle_id,
         data={"reason": reason},
     ))
-
-
-def _symbol_to_lighter_market(symbol: str) -> int:
-    mapping: dict[str, int] = {"BTC": 0, "ETH": 0, "SOL": 2, "DOGE": 3, "SUI": 5}
-    return mapping.get(symbol.upper(), 0)
