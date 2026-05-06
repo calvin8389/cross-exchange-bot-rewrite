@@ -174,18 +174,22 @@ class HyperliquidAdapter(ExchangeAdapter):
                 if entry["name"].upper() == coin:
                     sz_decimals = entry.get("szDecimals", 2)
                     size_step = float(10 ** -sz_decimals)
-                    # Derive price tick from mark price or impact prices
+                    # Derive price tick from impact price difference
                     price_tick = 0.01
                     if i < len(asset_ctxs):
                         ctx = asset_ctxs[i]
-                        mark_px = ctx.get("markPx")
-                        if mark_px:
-                            mark_str = str(mark_px)
-                            if "." in mark_str:
-                                decimals = len(mark_str.split(".")[1])
-                                price_tick = float(10 ** -decimals)
-                            else:
-                                price_tick = 1.0
+                        impact_pxs = ctx.get("impactPxs")
+                        if impact_pxs and len(impact_pxs) == 2:
+                            diff = abs(float(impact_pxs[1]) - float(impact_pxs[0]))
+                            if diff > 0:
+                                # Tick is the smallest price increment
+                                decimals = 0
+                                diff_str = f"{diff:.8f}".rstrip("0")
+                                if "." in diff_str:
+                                    decimals = len(diff_str.split(".")[1])
+                                    price_tick = float(10 ** -decimals)
+                                else:
+                                    price_tick = 1.0
                     return MarketDetails(
                         market_id=coin,
                         price_tick=price_tick,

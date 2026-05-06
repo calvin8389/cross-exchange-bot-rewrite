@@ -245,7 +245,7 @@ class GrvtAdapter(ExchangeAdapter):
             client = self._get_client()
             result = client.create_order(
                 symbol=contract,
-                type="market",
+                order_type="market",
                 side=side,
                 amount=size_base,
                 params={"reduce_only": True},
