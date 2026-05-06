@@ -100,15 +100,14 @@ async def open_position(
     # ---- 2. Insert cycle record ----------------------------------------
     from src.util.time import utc_now_iso
 
-    await store.conn.execute(
+    row = await store.conn.execute(
         """INSERT INTO cycles(symbol, state, direction, exchange_long, exchange_short, leverage, created_at, updated_at)
-           VALUES(?,?,?,?,?,?,?,?)""",
+           VALUES(?,?,?,?,?,?,?,?) RETURNING id""",
         (opp.symbol, "OPENING", opp.direction, opp.long_leg.exchange_id, opp.short_leg.exchange_id,
          config.leverage, utc_now_iso(), utc_now_iso()),
     )
-    await store.conn.commit()
-    row = await store.conn.execute("SELECT last_insert_rowid()")
     cycle_id = (await row.fetchone())[0]
+    await store.conn.commit()
 
     await store.append_event(Event(
         level="info", event_type="OPENING_START", cycle_id=cycle_id,
@@ -211,17 +210,16 @@ async def open_position(
         raise RuntimeError("Position confirmation failed, both legs closed")
 
     # ---- 6. Insert position record + legs ------------------------------
-    await store.conn.execute(
+    pos_row = await store.conn.execute(
         """INSERT INTO positions(cycle_id, symbol, is_active,
            exchange_long, exchange_short,
            opened_at, updated_at)
-           VALUES(?,?,1,?,?,?,?)""",
+           VALUES(?,?,1,?,?,?,?) RETURNING id""",
         (cycle_id, opp.symbol, opp.long_leg.exchange_id, opp.short_leg.exchange_id,
          utc_now_iso(), utc_now_iso()),
     )
-    await store.conn.commit()
-    pos_row = await store.conn.execute("SELECT last_insert_rowid()")
     position_id = (await pos_row.fetchone())[0]
+    await store.conn.commit()
 
     # Insert leg records
     await store.conn.execute(
