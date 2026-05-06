@@ -20,7 +20,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 5,
-      "_mark_px": 81512.0
+      "_mark_px": 81668.0
     },
     "ETH": {
       "market_id": "ETH",
@@ -39,7 +39,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 4,
-      "_mark_px": 2358.6
+      "_mark_px": 2359.1
     },
     "ATOM": {
       "market_id": "ATOM",
@@ -58,7 +58,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 1.9459
+      "_mark_px": 1.9177
     },
     "MATIC": {
       "market_id": "MATIC",
@@ -96,7 +96,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.15184
+      "_mark_px": 0.15346
     },
     "SOL": {
       "market_id": "SOL",
@@ -115,7 +115,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 88.362
+      "_mark_px": 88.95
     },
     "AVAX": {
       "market_id": "AVAX",
@@ -134,7 +134,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 9.5606
+      "_mark_px": 9.6318
     },
     "BNB": {
       "market_id": "BNB",
@@ -153,7 +153,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 3,
-      "_mark_px": 647.46
+      "_mark_px": 648.93
     },
     "APE": {
       "market_id": "APE",
@@ -172,7 +172,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.15944
+      "_mark_px": 0.16009
     },
     "OP": {
       "market_id": "OP",
@@ -191,7 +191,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.13475
+      "_mark_px": 0.13622
     },
     "LTC": {
       "market_id": "LTC",
@@ -210,7 +210,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 56.825
+      "_mark_px": 57.106
     },
     "ARB": {
       "market_id": "ARB",
@@ -229,7 +229,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.12388
+      "_mark_px": 0.12366
     },
     "DOGE": {
       "market_id": "DOGE",
@@ -248,7 +248,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.11289
+      "_mark_px": 0.11321
     },
     "INJ": {
       "market_id": "INJ",
@@ -267,7 +267,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 3.8398
+      "_mark_px": 3.886
     },
     "SUI": {
       "market_id": "SUI",
@@ -286,7 +286,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.98299
+      "_mark_px": 0.99171
     },
     "KPEPE": {
       "market_id": "KPEPE",
@@ -305,7 +305,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.004139
+      "_mark_px": 0.004153
     },
     "CRV": {
       "market_id": "CRV",
@@ -324,7 +324,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.24597
+      "_mark_px": 0.24771
     },
     "LDO": {
       "market_id": "LDO",
@@ -343,13 +343,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.38482
+      "_mark_px": 0.38729
     },
     "LINK": {
       "market_id": "LINK",
       "symbol": "LINK",
-      "price_tick": 0.0001,
-      "price_precision": 4,
+      "price_tick": 0.001,
+      "price_precision": 3,
       "size_step": 0.1,
       "size_precision": 1,
       "min_order_size": 0.1,
@@ -362,7 +362,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 9.9738
+      "_mark_px": 10.039
     },
     "STX": {
       "market_id": "STX",
@@ -381,7 +381,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.24478
+      "_mark_px": 0.24635
     },
     "RNDR": {
       "market_id": "RNDR",
@@ -419,7 +419,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.062746
+      "_mark_px": 0.063321
     },
     "FTM": {
       "market_id": "FTM",
@@ -457,7 +457,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 7.3136
+      "_mark_px": 7.3184
     },
     "SNX": {
       "market_id": "SNX",
@@ -476,7 +476,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.32547
+      "_mark_px": 0.32912
     },
     "XRP": {
       "market_id": "XRP",
@@ -495,7 +495,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 1.4228
+      "_mark_px": 1.4302
     },
     "BCH": {
       "market_id": "BCH",
@@ -514,7 +514,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 3,
-      "_mark_px": 463.07
+      "_mark_px": 468.74
     },
     "APT": {
       "market_id": "APT",
@@ -533,7 +533,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 1.0164
+      "_mark_px": 1.0185
     },
     "AAVE": {
       "market_id": "AAVE",
@@ -552,12 +552,12 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 93.229
+      "_mark_px": 93.679
     },
     "COMP": {
       "market_id": "COMP",
       "symbol": "COMP",
-      "price_tick": 0.001,
+      "price_tick": 0.003,
       "price_precision": 3,
       "size_step": 0.01,
       "size_precision": 2,
@@ -571,7 +571,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 23.552
+      "_mark_px": 23.542
     },
     "MKR": {
       "market_id": "MKR",
@@ -609,7 +609,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.25292
+      "_mark_px": 0.2572
     },
     "FXS": {
       "market_id": "FXS",
@@ -704,7 +704,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.043703
+      "_mark_px": 0.044021
     },
     "TRX": {
       "market_id": "TRX",
@@ -723,7 +723,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.34375
+      "_mark_px": 0.34468
     },
     "KSHIB": {
       "market_id": "KSHIB",
@@ -742,7 +742,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.006365
+      "_mark_px": 0.006378
     },
     "UNI": {
       "market_id": "UNI",
@@ -761,7 +761,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 3.4407
+      "_mark_px": 3.4796
     },
     "SEI": {
       "market_id": "SEI",
@@ -780,7 +780,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.060636
+      "_mark_px": 0.061284
     },
     "RUNE": {
       "market_id": "RUNE",
@@ -799,7 +799,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.56141
+      "_mark_px": 0.56049
     },
     "OX": {
       "market_id": "OX",
@@ -894,7 +894,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 1.4295
+      "_mark_px": 1.4363
     },
     "BLZ": {
       "market_id": "BLZ",
@@ -932,7 +932,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 1.2961
+      "_mark_px": 1.3084
     },
     "BANANA": {
       "market_id": "BANANA",
@@ -951,7 +951,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 4.0475
+      "_mark_px": 4.0759
     },
     "TRB": {
       "market_id": "TRB",
@@ -970,7 +970,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 19.984
+      "_mark_px": 20.055
     },
     "FTT": {
       "market_id": "FTT",
@@ -989,7 +989,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.32526
+      "_mark_px": 0.32627
     },
     "LOOM": {
       "market_id": "LOOM",
@@ -1051,7 +1051,7 @@
     "ARK": {
       "market_id": "ARK",
       "symbol": "ARK",
-      "price_tick": 1e-05,
+      "price_tick": 2e-05,
       "price_precision": 5,
       "size_step": 1.0,
       "size_precision": 0,
@@ -1065,7 +1065,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.18015
+      "_mark_px": 0.18095
     },
     "BNT": {
       "market_id": "BNT",
@@ -1127,8 +1127,8 @@
     "BIGTIME": {
       "market_id": "BIGTIME",
       "symbol": "BIGTIME",
-      "price_tick": 1e-06,
-      "price_precision": 6,
+      "price_tick": 0.01,
+      "price_precision": 2,
       "size_step": 1.0,
       "size_precision": 0,
       "min_order_size": 1.0,
@@ -1141,7 +1141,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.013782
+      "_mark_px": 0.013798
     },
     "KAS": {
       "market_id": "KAS",
@@ -1160,7 +1160,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.036
+      "_mark_px": 0.036315
     },
     "ORBS": {
       "market_id": "ORBS",
@@ -1198,13 +1198,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.027344
+      "_mark_px": 0.027262
     },
     "TIA": {
       "market_id": "TIA",
       "symbol": "TIA",
-      "price_tick": 1e-05,
-      "price_precision": 5,
+      "price_tick": 0.01,
+      "price_precision": 2,
       "size_step": 0.1,
       "size_precision": 1,
       "min_order_size": 0.1,
@@ -1217,13 +1217,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.37309
+      "_mark_px": 0.37699
     },
     "BSV": {
       "market_id": "BSV",
       "symbol": "BSV",
-      "price_tick": 0.002,
-      "price_precision": 3,
+      "price_tick": 0.01,
+      "price_precision": 2,
       "size_step": 0.01,
       "size_precision": 2,
       "min_order_size": 0.01,
@@ -1236,7 +1236,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 16.46
+      "_mark_px": 16.499
     },
     "ADA": {
       "market_id": "ADA",
@@ -1255,13 +1255,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.26585
+      "_mark_px": 0.2672
     },
     "TON": {
       "market_id": "TON",
       "symbol": "TON",
-      "price_tick": 0.0001,
-      "price_precision": 4,
+      "price_tick": 0.01,
+      "price_precision": 2,
       "size_step": 0.1,
       "size_precision": 1,
       "min_order_size": 0.1,
@@ -1274,13 +1274,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 2.2675
+      "_mark_px": 2.2832
     },
     "MINA": {
       "market_id": "MINA",
       "symbol": "MINA",
-      "price_tick": 1e-06,
-      "price_precision": 6,
+      "price_tick": 0.01,
+      "price_precision": 2,
       "size_step": 1.0,
       "size_precision": 0,
       "min_order_size": 1.0,
@@ -1293,12 +1293,12 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.06415
+      "_mark_px": 0.064966
     },
     "POLYX": {
       "market_id": "POLYX",
       "symbol": "POLYX",
-      "price_tick": 1e-06,
+      "price_tick": 5e-06,
       "price_precision": 6,
       "size_step": 1.0,
       "size_precision": 0,
@@ -1312,13 +1312,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.050373
+      "_mark_px": 0.050505
     },
     "GAS": {
       "market_id": "GAS",
       "symbol": "GAS",
-      "price_tick": 0.0001,
-      "price_precision": 4,
+      "price_tick": 0.01,
+      "price_precision": 2,
       "size_step": 0.1,
       "size_precision": 1,
       "min_order_size": 0.1,
@@ -1331,13 +1331,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 1.6567
+      "_mark_px": 1.667
     },
     "PENDLE": {
       "market_id": "PENDLE",
       "symbol": "PENDLE",
-      "price_tick": 0.0001,
-      "price_precision": 4,
+      "price_tick": 0.01,
+      "price_precision": 2,
       "size_step": 1.0,
       "size_precision": 0,
       "min_order_size": 1.0,
@@ -1350,7 +1350,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 1.9316
+      "_mark_px": 1.8902
     },
     "STG": {
       "market_id": "STG",
@@ -1388,7 +1388,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.22081
+      "_mark_px": 0.22411
     },
     "STRAX": {
       "market_id": "STRAX",
@@ -1426,7 +1426,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 1.4715
+      "_mark_px": 1.5067
     },
     "MEME": {
       "market_id": "MEME",
@@ -1445,7 +1445,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.000601
+      "_mark_px": 0.000602
     },
     "ORDI": {
       "market_id": "ORDI",
@@ -1464,7 +1464,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 5.1989
+      "_mark_px": 5.347
     },
     "BADGER": {
       "market_id": "BADGER",
@@ -1502,7 +1502,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 2.9122
+      "_mark_px": 2.9406
     },
     "ZEN": {
       "market_id": "ZEN",
@@ -1521,7 +1521,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 7.5202
+      "_mark_px": 7.604
     },
     "FIL": {
       "market_id": "FIL",
@@ -1540,7 +1540,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 1.0553
+      "_mark_px": 1.0694
     },
     "PYTH": {
       "market_id": "PYTH",
@@ -1559,12 +1559,12 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.052
+      "_mark_px": 0.051996
     },
     "SUSHI": {
       "market_id": "SUSHI",
       "symbol": "SUSHI",
-      "price_tick": 1e-05,
+      "price_tick": 2e-05,
       "price_precision": 5,
       "size_step": 0.1,
       "size_precision": 1,
@@ -1578,7 +1578,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.2262
+      "_mark_px": 0.22757
     },
     "ILV": {
       "market_id": "ILV",
@@ -1602,7 +1602,7 @@
     "IMX": {
       "market_id": "IMX",
       "symbol": "IMX",
-      "price_tick": 1e-05,
+      "price_tick": 3e-05,
       "price_precision": 5,
       "size_step": 0.1,
       "size_precision": 1,
@@ -1616,7 +1616,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.1726
+      "_mark_px": 0.1741
     },
     "KBONK": {
       "market_id": "KBONK",
@@ -1635,7 +1635,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.006745
+      "_mark_px": 0.006743
     },
     "GMT": {
       "market_id": "GMT",
@@ -1654,12 +1654,12 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.011172
+      "_mark_px": 0.011296
     },
     "SUPER": {
       "market_id": "SUPER",
       "symbol": "SUPER",
-      "price_tick": 2e-05,
+      "price_tick": 1e-05,
       "price_precision": 5,
       "size_step": 1.0,
       "size_precision": 0,
@@ -1673,7 +1673,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.12733
+      "_mark_px": 0.12772
     },
     "USTC": {
       "market_id": "USTC",
@@ -1730,7 +1730,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.20411
+      "_mark_px": 0.20057
     },
     "KLUNC": {
       "market_id": "KLUNC",
@@ -1749,7 +1749,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.10523
+      "_mark_px": 0.10543
     },
     "RSR": {
       "market_id": "RSR",
@@ -1768,7 +1768,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.001974
+      "_mark_px": 0.001997
     },
     "GALA": {
       "market_id": "GALA",
@@ -1787,7 +1787,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.003606
+      "_mark_px": 0.003656
     },
     "JTO": {
       "market_id": "JTO",
@@ -1806,7 +1806,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.4442
+      "_mark_px": 0.43138
     },
     "NTRN": {
       "market_id": "NTRN",
@@ -1844,7 +1844,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 0.1286
+      "_mark_px": 0.1287
     },
     "MAV": {
       "market_id": "MAV",
@@ -1882,7 +1882,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.21971
+      "_mark_px": 0.21921
     },
     "CAKE": {
       "market_id": "CAKE",
@@ -1901,7 +1901,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 1.5604
+      "_mark_px": 1.5671
     },
     "PEOPLE": {
       "market_id": "PEOPLE",
@@ -1920,7 +1920,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.008267
+      "_mark_px": 0.008305
     },
     "ENS": {
       "market_id": "ENS",
@@ -1939,7 +1939,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 6.5061
+      "_mark_px": 6.5541
     },
     "ETC": {
       "market_id": "ETC",
@@ -1958,7 +1958,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 9.2755
+      "_mark_px": 9.4428
     },
     "XAI": {
       "market_id": "XAI",
@@ -1977,7 +1977,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.01123
+      "_mark_px": 0.01126
     },
     "MANTA": {
       "market_id": "MANTA",
@@ -1996,12 +1996,12 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.06752
+      "_mark_px": 0.06807
     },
     "UMA": {
       "market_id": "UMA",
       "symbol": "UMA",
-      "price_tick": 1e-05,
+      "price_tick": 3e-05,
       "price_precision": 5,
       "size_step": 0.1,
       "size_precision": 1,
@@ -2015,7 +2015,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.4771
+      "_mark_px": 0.47781
     },
     "ONDO": {
       "market_id": "ONDO",
@@ -2034,7 +2034,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.33059
+      "_mark_px": 0.32922
     },
     "ALT": {
       "market_id": "ALT",
@@ -2053,7 +2053,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.007971
+      "_mark_px": 0.008013
     },
     "ZETA": {
       "market_id": "ZETA",
@@ -2072,7 +2072,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.06066
+      "_mark_px": 0.061
     },
     "DYM": {
       "market_id": "DYM",
@@ -2091,7 +2091,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.02006
+      "_mark_px": 0.0201
     },
     "MAVIA": {
       "market_id": "MAVIA",
@@ -2129,7 +2129,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.01382
+      "_mark_px": 0.014
     },
     "PANDORA": {
       "market_id": "PANDORA",
@@ -2167,7 +2167,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.04109
+      "_mark_px": 0.04145
     },
     "PIXEL": {
       "market_id": "PIXEL",
@@ -2224,7 +2224,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 3,
-      "_mark_px": 311.63
+      "_mark_px": 316.31
     },
     "AR": {
       "market_id": "AR",
@@ -2243,7 +2243,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 2.4724
+      "_mark_px": 2.5541
     },
     "MYRO": {
       "market_id": "MYRO",
@@ -2281,7 +2281,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.033238
+      "_mark_px": 0.033497
     },
     "BOME": {
       "market_id": "BOME",
@@ -2300,7 +2300,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.000582
+      "_mark_px": 0.000583
     },
     "ETHFI": {
       "market_id": "ETHFI",
@@ -2319,7 +2319,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.43139
+      "_mark_px": 0.43505
     },
     "ENA": {
       "market_id": "ENA",
@@ -2338,7 +2338,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.11866
+      "_mark_px": 0.1176
     },
     "MNT": {
       "market_id": "MNT",
@@ -2357,7 +2357,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.67076
+      "_mark_px": 0.66992
     },
     "TNSR": {
       "market_id": "TNSR",
@@ -2376,7 +2376,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.04098
+      "_mark_px": 0.0412
     },
     "SAGA": {
       "market_id": "SAGA",
@@ -2395,13 +2395,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.01827
+      "_mark_px": 0.01842
     },
     "MERL": {
       "market_id": "MERL",
       "symbol": "MERL",
-      "price_tick": 1e-06,
-      "price_precision": 6,
+      "price_tick": 0.01,
+      "price_precision": 2,
       "size_step": 1.0,
       "size_precision": 0,
       "min_order_size": 1.0,
@@ -2414,13 +2414,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.037242
+      "_mark_px": 0.037263
     },
     "HBAR": {
       "market_id": "HBAR",
       "symbol": "HBAR",
-      "price_tick": 1e-06,
-      "price_precision": 6,
+      "price_tick": 0.01,
+      "price_precision": 2,
       "size_step": 1.0,
       "size_precision": 0,
       "min_order_size": 1.0,
@@ -2433,7 +2433,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.091029
+      "_mark_px": 0.091654
     },
     "POPCAT": {
       "market_id": "POPCAT",
@@ -2452,7 +2452,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.066443
+      "_mark_px": 0.06728
     },
     "OMNI": {
       "market_id": "OMNI",
@@ -2490,7 +2490,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 0.2001
+      "_mark_px": 0.2011
     },
     "REZ": {
       "market_id": "REZ",
@@ -2509,7 +2509,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.005335
+      "_mark_px": 0.005353
     },
     "NOT": {
       "market_id": "NOT",
@@ -2528,7 +2528,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.000529
+      "_mark_px": 0.000536
     },
     "TURBO": {
       "market_id": "TURBO",
@@ -2547,7 +2547,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.001282
+      "_mark_px": 0.001294
     },
     "BRETT": {
       "market_id": "BRETT",
@@ -2566,7 +2566,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.008098
+      "_mark_px": 0.008148
     },
     "IO": {
       "market_id": "IO",
@@ -2585,7 +2585,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.15848
+      "_mark_px": 0.15474
     },
     "ZK": {
       "market_id": "ZK",
@@ -2604,7 +2604,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.018883
+      "_mark_px": 0.019317
     },
     "BLAST": {
       "market_id": "BLAST",
@@ -2623,7 +2623,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.000498
+      "_mark_px": 0.000499
     },
     "LISTA": {
       "market_id": "LISTA",
@@ -2680,7 +2680,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 1.923
+      "_mark_px": 1.967
     },
     "KDOGS": {
       "market_id": "KDOGS",
@@ -2718,7 +2718,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.098828
+      "_mark_px": 0.098321
     },
     "CATI": {
       "market_id": "CATI",
@@ -2742,8 +2742,8 @@
     "CELO": {
       "market_id": "CELO",
       "symbol": "CELO",
-      "price_tick": 2e-05,
-      "price_precision": 5,
+      "price_tick": 1e-06,
+      "price_precision": 6,
       "size_step": 1.0,
       "size_precision": 0,
       "min_order_size": 1.0,
@@ -2756,7 +2756,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.092171
+      "_mark_px": 0.093045
     },
     "HMSTR": {
       "market_id": "HMSTR",
@@ -2775,7 +2775,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.000178
+      "_mark_px": 0.00018
     },
     "SCR": {
       "market_id": "SCR",
@@ -2832,7 +2832,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.09698
+      "_mark_px": 0.09794
     },
     "GOAT": {
       "market_id": "GOAT",
@@ -2851,7 +2851,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.01858
+      "_mark_px": 0.018725
     },
     "MOODENG": {
       "market_id": "MOODENG",
@@ -2870,7 +2870,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.063444
+      "_mark_px": 0.064085
     },
     "GRASS": {
       "market_id": "GRASS",
@@ -2889,7 +2889,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.36198
+      "_mark_px": 0.36208
     },
     "PURR": {
       "market_id": "PURR",
@@ -2908,13 +2908,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.077779
+      "_mark_px": 0.077459
     },
     "PNUT": {
       "market_id": "PNUT",
       "symbol": "PNUT",
-      "price_tick": 0.01,
-      "price_precision": 2,
+      "price_tick": 1e-05,
+      "price_precision": 5,
       "size_step": 0.1,
       "size_precision": 1,
       "min_order_size": 0.1,
@@ -2927,13 +2927,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.06137
+      "_mark_px": 0.06189
     },
     "XLM": {
       "market_id": "XLM",
       "symbol": "XLM",
-      "price_tick": 0.01,
-      "price_precision": 2,
+      "price_tick": 1e-05,
+      "price_precision": 5,
       "size_step": 1.0,
       "size_precision": 0,
       "min_order_size": 1.0,
@@ -2946,13 +2946,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.16157
+      "_mark_px": 0.16105
     },
     "CHILLGUY": {
       "market_id": "CHILLGUY",
       "symbol": "CHILLGUY",
-      "price_tick": 0.01,
-      "price_precision": 2,
+      "price_tick": 1e-06,
+      "price_precision": 6,
       "size_step": 1.0,
       "size_precision": 0,
       "min_order_size": 1.0,
@@ -2965,13 +2965,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.019186
+      "_mark_px": 0.018047
     },
     "SAND": {
       "market_id": "SAND",
       "symbol": "SAND",
-      "price_tick": 0.01,
-      "price_precision": 2,
+      "price_tick": 1e-06,
+      "price_precision": 6,
       "size_step": 1.0,
       "size_precision": 0,
       "min_order_size": 1.0,
@@ -2984,13 +2984,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.07614
+      "_mark_px": 0.07676
     },
     "IOTA": {
       "market_id": "IOTA",
       "symbol": "IOTA",
-      "price_tick": 0.01,
-      "price_precision": 2,
+      "price_tick": 1e-06,
+      "price_precision": 6,
       "size_step": 1.0,
       "size_precision": 0,
       "min_order_size": 1.0,
@@ -3003,13 +3003,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.058452
+      "_mark_px": 0.058657
     },
     "ALGO": {
       "market_id": "ALGO",
       "symbol": "ALGO",
-      "price_tick": 0.01,
-      "price_precision": 2,
+      "price_tick": 1e-05,
+      "price_precision": 5,
       "size_step": 1.0,
       "size_precision": 0,
       "min_order_size": 1.0,
@@ -3022,13 +3022,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.12032
+      "_mark_px": 0.11995
     },
     "HYPE": {
       "market_id": "HYPE",
       "symbol": "HYPE",
-      "price_tick": 0.01,
-      "price_precision": 2,
+      "price_tick": 0.001,
+      "price_precision": 3,
       "size_step": 0.01,
       "size_precision": 2,
       "min_order_size": 0.01,
@@ -3041,13 +3041,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 43.687
+      "_mark_px": 43.493
     },
     "ME": {
       "market_id": "ME",
       "symbol": "ME",
-      "price_tick": 0.01,
-      "price_precision": 2,
+      "price_tick": 1e-05,
+      "price_precision": 5,
       "size_step": 0.1,
       "size_precision": 1,
       "min_order_size": 0.1,
@@ -3060,7 +3060,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.10822
+      "_mark_px": 0.10921
     },
     "MOVE": {
       "market_id": "MOVE",
@@ -3079,7 +3079,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.018145
+      "_mark_px": 0.018314
     },
     "VIRTUAL": {
       "market_id": "VIRTUAL",
@@ -3098,7 +3098,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.84238
+      "_mark_px": 0.86082
     },
     "PENGU": {
       "market_id": "PENGU",
@@ -3117,7 +3117,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.010871
+      "_mark_px": 0.010936
     },
     "USUAL": {
       "market_id": "USUAL",
@@ -3136,7 +3136,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.01541
+      "_mark_px": 0.01555
     },
     "FARTCOIN": {
       "market_id": "FARTCOIN",
@@ -3155,7 +3155,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.24353
+      "_mark_px": 0.25241
     },
     "AI16Z": {
       "market_id": "AI16Z",
@@ -3179,7 +3179,7 @@
     "AIXBT": {
       "market_id": "AIXBT",
       "symbol": "AIXBT",
-      "price_tick": 3e-06,
+      "price_tick": 1e-06,
       "price_precision": 6,
       "size_step": 1.0,
       "size_precision": 0,
@@ -3193,7 +3193,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.033361
+      "_mark_px": 0.033674
     },
     "ZEREBRO": {
       "market_id": "ZEREBRO",
@@ -3231,7 +3231,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.048475
+      "_mark_px": 0.048871
     },
     "GRIFFAIN": {
       "market_id": "GRIFFAIN",
@@ -3250,7 +3250,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.014929
+      "_mark_px": 0.015326
     },
     "SPX": {
       "market_id": "SPX",
@@ -3269,7 +3269,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.41604
+      "_mark_px": 0.42514
     },
     "S": {
       "market_id": "S",
@@ -3288,7 +3288,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.04806
+      "_mark_px": 0.048501
     },
     "MORPHO": {
       "market_id": "MORPHO",
@@ -3307,7 +3307,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 2.3498
+      "_mark_px": 2.3187
     },
     "TRUMP": {
       "market_id": "TRUMP",
@@ -3326,7 +3326,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 2.3614
+      "_mark_px": 2.3658
     },
     "MELANIA": {
       "market_id": "MELANIA",
@@ -3345,7 +3345,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.10491
+      "_mark_px": 0.10517
     },
     "ANIME": {
       "market_id": "ANIME",
@@ -3364,12 +3364,12 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.004895
+      "_mark_px": 0.004935
     },
     "VINE": {
       "market_id": "VINE",
       "symbol": "VINE",
-      "price_tick": 5e-06,
+      "price_tick": 1e-06,
       "price_precision": 6,
       "size_step": 1.0,
       "size_precision": 0,
@@ -3383,7 +3383,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.015502
+      "_mark_px": 0.015792
     },
     "VVV": {
       "market_id": "VVV",
@@ -3402,7 +3402,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 11.108
+      "_mark_px": 11.388
     },
     "JELLY": {
       "market_id": "JELLY",
@@ -3440,12 +3440,12 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.37982
+      "_mark_px": 0.38354
     },
     "TST": {
       "market_id": "TST",
       "symbol": "TST",
-      "price_tick": 4e-06,
+      "price_tick": 2e-06,
       "price_precision": 6,
       "size_step": 1.0,
       "size_precision": 0,
@@ -3459,7 +3459,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.020049
+      "_mark_px": 0.019715
     },
     "LAYER": {
       "market_id": "LAYER",
@@ -3478,7 +3478,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.08727
+      "_mark_px": 0.087595
     },
     "IP": {
       "market_id": "IP",
@@ -3497,7 +3497,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 0.51874
+      "_mark_px": 0.52234
     },
     "OM": {
       "market_id": "OM",
@@ -3535,7 +3535,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.50087
+      "_mark_px": 0.49932
     },
     "NIL": {
       "market_id": "NIL",
@@ -3554,7 +3554,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.041804
+      "_mark_px": 0.04318
     },
     "PAXG": {
       "market_id": "PAXG",
@@ -3573,7 +3573,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 3,
-      "_mark_px": 4690.7
+      "_mark_px": 4674.0
     },
     "PROMPT": {
       "market_id": "PROMPT",
@@ -3611,12 +3611,12 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.017343
+      "_mark_px": 0.017233
     },
     "WCT": {
       "market_id": "WCT",
       "symbol": "WCT",
-      "price_tick": 1e-06,
+      "price_tick": 2e-06,
       "price_precision": 6,
       "size_step": 1.0,
       "size_precision": 0,
@@ -3630,7 +3630,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.06469
+      "_mark_px": 0.06517
     },
     "HYPER": {
       "market_id": "HYPER",
@@ -3649,7 +3649,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.10529
+      "_mark_px": 0.10602
     },
     "ZORA": {
       "market_id": "ZORA",
@@ -3668,7 +3668,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.013134
+      "_mark_px": 0.013145
     },
     "INIT": {
       "market_id": "INIT",
@@ -3687,7 +3687,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.098361
+      "_mark_px": 0.099303
     },
     "DOOD": {
       "market_id": "DOOD",
@@ -3706,7 +3706,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.003268
+      "_mark_px": 0.003286
     },
     "LAUNCHCOIN": {
       "market_id": "LAUNCHCOIN",
@@ -3744,7 +3744,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.3069
+      "_mark_px": 0.30888
     },
     "SOPH": {
       "market_id": "SOPH",
@@ -3763,7 +3763,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.008784
+      "_mark_px": 0.008856
     },
     "RESOLV": {
       "market_id": "RESOLV",
@@ -3782,7 +3782,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.03084
+      "_mark_px": 0.031338
     },
     "SYRUP": {
       "market_id": "SYRUP",
@@ -3801,7 +3801,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.25311
+      "_mark_px": 0.25301
     },
     "PUMP": {
       "market_id": "PUMP",
@@ -3820,7 +3820,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.001956
+      "_mark_px": 0.001986
     },
     "PROVE": {
       "market_id": "PROVE",
@@ -3839,7 +3839,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.25931
+      "_mark_px": 0.26025
     },
     "YZY": {
       "market_id": "YZY",
@@ -3863,8 +3863,8 @@
     "XPL": {
       "market_id": "XPL",
       "symbol": "XPL",
-      "price_tick": 2e-06,
-      "price_precision": 6,
+      "price_tick": 1e-05,
+      "price_precision": 5,
       "size_step": 1.0,
       "size_precision": 0,
       "min_order_size": 1.0,
@@ -3877,7 +3877,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.09587
+      "_mark_px": 0.098976
     },
     "WLFI": {
       "market_id": "WLFI",
@@ -3896,7 +3896,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.067504
+      "_mark_px": 0.068003
     },
     "LINEA": {
       "market_id": "LINEA",
@@ -3915,7 +3915,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.003667
+      "_mark_px": 0.00371
     },
     "SKY": {
       "market_id": "SKY",
@@ -3934,7 +3934,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.080553
+      "_mark_px": 0.08042
     },
     "ASTER": {
       "market_id": "ASTER",
@@ -3953,7 +3953,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.67889
+      "_mark_px": 0.68226
     },
     "AVNT": {
       "market_id": "AVNT",
@@ -3972,7 +3972,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.14822
+      "_mark_px": 0.14948
     },
     "STBL": {
       "market_id": "STBL",
@@ -3991,7 +3991,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.038505
+      "_mark_px": 0.038531
     },
     "0G": {
       "market_id": "0G",
@@ -4010,7 +4010,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.54996
+      "_mark_px": 0.55382
     },
     "HEMI": {
       "market_id": "HEMI",
@@ -4029,7 +4029,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.007927
+      "_mark_px": 0.007883
     },
     "APEX": {
       "market_id": "APEX",
@@ -4048,12 +4048,12 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.30138
+      "_mark_px": 0.29652
     },
     "2Z": {
       "market_id": "2Z",
       "symbol": "2Z",
-      "price_tick": 3e-06,
+      "price_tick": 1e-06,
       "price_precision": 6,
       "size_step": 1.0,
       "size_precision": 0,
@@ -4067,7 +4067,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.093535
+      "_mark_px": 0.093296
     },
     "ZEC": {
       "market_id": "ZEC",
@@ -4086,7 +4086,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 574.16
+      "_mark_px": 586.22
     },
     "MON": {
       "market_id": "MON",
@@ -4105,7 +4105,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.032444
+      "_mark_px": 0.032547
     },
     "MET": {
       "market_id": "MET",
@@ -4124,7 +4124,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.16747
+      "_mark_px": 0.16857
     },
     "MEGA": {
       "market_id": "MEGA",
@@ -4143,7 +4143,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.12535
+      "_mark_px": 0.12475
     },
     "CC": {
       "market_id": "CC",
@@ -4162,13 +4162,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.1476
+      "_mark_px": 0.14765
     },
     "ICP": {
       "market_id": "ICP",
       "symbol": "ICP",
-      "price_tick": 0.01,
-      "price_precision": 2,
+      "price_tick": 0.0001,
+      "price_precision": 4,
       "size_step": 0.1,
       "size_precision": 1,
       "min_order_size": 0.1,
@@ -4181,13 +4181,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 2.7566
+      "_mark_px": 2.9529
     },
     "AERO": {
       "market_id": "AERO",
       "symbol": "AERO",
-      "price_tick": 0.01,
-      "price_precision": 2,
+      "price_tick": 1e-05,
+      "price_precision": 5,
       "size_step": 1.0,
       "size_precision": 0,
       "min_order_size": 1.0,
@@ -4200,13 +4200,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.46343
+      "_mark_px": 0.46165
     },
     "STABLE": {
       "market_id": "STABLE",
       "symbol": "STABLE",
-      "price_tick": 0.01,
-      "price_precision": 2,
+      "price_tick": 1e-06,
+      "price_precision": 6,
       "size_step": 1.0,
       "size_precision": 0,
       "min_order_size": 1.0,
@@ -4219,13 +4219,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.034366
+      "_mark_px": 0.034399
     },
     "FOGO": {
       "market_id": "FOGO",
       "symbol": "FOGO",
-      "price_tick": 0.01,
-      "price_precision": 2,
+      "price_tick": 1e-06,
+      "price_precision": 6,
       "size_step": 1.0,
       "size_precision": 0,
       "min_order_size": 1.0,
@@ -4238,7 +4238,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.0199
+      "_mark_px": 0.020008
     },
     "LIT": {
       "market_id": "LIT",
@@ -4257,7 +4257,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.94389
+      "_mark_px": 0.94877
     },
     "XMR": {
       "market_id": "XMR",
@@ -4276,13 +4276,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 3,
-      "_mark_px": 421.9
+      "_mark_px": 421.82
     },
     "AXS": {
       "market_id": "AXS",
       "symbol": "AXS",
-      "price_tick": 0.01,
-      "price_precision": 2,
+      "price_tick": 0.0001,
+      "price_precision": 4,
       "size_step": 0.1,
       "size_precision": 1,
       "min_order_size": 0.1,
@@ -4295,13 +4295,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 1,
-      "_mark_px": 1.35
+      "_mark_px": 1.3617
     },
     "DASH": {
       "market_id": "DASH",
       "symbol": "DASH",
-      "price_tick": 0.01,
-      "price_precision": 2,
+      "price_tick": 0.001,
+      "price_precision": 3,
       "size_step": 0.01,
       "size_precision": 2,
       "min_order_size": 0.01,
@@ -4314,13 +4314,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 2,
-      "_mark_px": 54.952
+      "_mark_px": 55.565
     },
     "SKR": {
       "market_id": "SKR",
       "symbol": "SKR",
-      "price_tick": 0.01,
-      "price_precision": 2,
+      "price_tick": 1e-06,
+      "price_precision": 6,
       "size_step": 1.0,
       "size_precision": 0,
       "min_order_size": 1.0,
@@ -4333,13 +4333,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.016258
+      "_mark_px": 0.016286
     },
     "AZTEC": {
       "market_id": "AZTEC",
       "symbol": "AZTEC",
-      "price_tick": 0.01,
-      "price_precision": 2,
+      "price_tick": 1e-06,
+      "price_precision": 6,
       "size_step": 1.0,
       "size_precision": 0,
       "min_order_size": 1.0,
@@ -4352,13 +4352,13 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.020597
+      "_mark_px": 0.020593
     },
     "CHIP": {
       "market_id": "CHIP",
       "symbol": "CHIP",
-      "price_tick": 0.01,
-      "price_precision": 2,
+      "price_tick": 1e-06,
+      "price_precision": 6,
       "size_step": 1.0,
       "size_precision": 0,
       "min_order_size": 1.0,
@@ -4371,7 +4371,7 @@
       "maker_fee": null,
       "status": "active",
       "_sz_decimals": 0,
-      "_mark_px": 0.054191
+      "_mark_px": 0.054907
     }
   }
 }

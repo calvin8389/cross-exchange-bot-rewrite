@@ -188,7 +188,8 @@ class HyperliquidAdapter(ExchangeAdapter):
                                 if diff > 0 and (min_diff is None or diff < min_diff):
                                     min_diff = diff
                             if min_diff is not None:
-                                price_tick = min_diff
+                                price_tick = float(f"{min_diff:.10g}")
+                                price_tick = max(price_tick, 1e-8)
                     except Exception:
                         pass  # fall back to 0.01
                     return MarketDetails(
@@ -211,6 +212,10 @@ class HyperliquidAdapter(ExchangeAdapter):
 
         coin = str(market_id) if market_id else symbol.upper()
         is_buy = side == "buy"
+        # Round price to avoid floating-point artifacts that HL SDK rejects
+        md = await self.get_market_details(symbol)
+        tick_decimals = max(0, int(round(-__import__("math").log10(md.price_tick))))
+        px = round(price, tick_decimals)
 
         def _sync():
             exchange = self._get_exchange()
@@ -218,7 +223,7 @@ class HyperliquidAdapter(ExchangeAdapter):
                 name=coin,
                 is_buy=is_buy,
                 sz=size_base,
-                limit_px=price,
+                limit_px=px,
                 order_type=OrderType(limit={"tif": "Gtc"}),
                 reduce_only=False,
             )
