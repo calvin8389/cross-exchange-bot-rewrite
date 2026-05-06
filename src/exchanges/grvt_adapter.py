@@ -277,6 +277,13 @@ class GrvtAdapter(ExchangeAdapter):
         from src.exchanges.base import FundingPayment
 
         instrument = str(market_id) if market_id else symbol.upper()
+        # Resolve short symbol names to full instrument (e.g. "BCH" → "BCH_USDT_Perp")
+        if "_" not in instrument:
+            try:
+                m = self._find_market(symbol)
+                instrument = m.get("instrument", instrument)
+            except Exception:
+                pass
 
         def _sync():
             client = self._get_client()
@@ -290,11 +297,15 @@ class GrvtAdapter(ExchangeAdapter):
             else:
                 since_dt = datetime.fromisoformat(since_ts.replace("Z", "+00:00"))
 
-            start_ms = int(since_dt.timestamp() * 1000)
-            end_ms = int(until_dt.timestamp() * 1000)
+            # SDK expects nanoseconds, limit=1000, end_time in params
+            since_ns = int(since_dt.timestamp() * 1_000_000_000)
+            end_ns = int(until_dt.timestamp() * 1_000_000_000)
 
             try:
-                history = client.fetch_funding_rate_history(instrument, start_ms, end_ms)
+                history = client.fetch_funding_rate_history(
+                    instrument, since_ns, limit=1000,
+                    params={"end_time": end_ns},
+                )
             except Exception:
                 return []
 
