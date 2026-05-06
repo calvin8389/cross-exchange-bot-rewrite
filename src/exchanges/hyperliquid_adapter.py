@@ -117,16 +117,21 @@ class HyperliquidAdapter(ExchangeAdapter):
     # ------------------------------------------------------------------
 
     async def get_funding_rate(self, market_id: int | str) -> Optional[FundingRate]:
+        import time as _time
         coin = str(market_id)
         def _sync():
             info = self._get_info()
-            meta, asset_ctxs = info.meta_and_asset_ctxs()
+            # Cache meta+ctx to avoid repeated heavy calls (30s TTL)
+            if self._meta_cache and _time.monotonic() - self._meta_cache[0] < 30:
+                meta, asset_ctxs = self._meta_cache[1]
+            else:
+                meta, asset_ctxs = info.meta_and_asset_ctxs()
+                self._meta_cache = (_time.monotonic(), (meta, asset_ctxs))
             universe = meta["universe"]
             for i, entry in enumerate(universe):
                 if entry["name"].upper() == coin.upper() and i < len(asset_ctxs):
                     ctx = asset_ctxs[i]
                     rate = float(ctx.get("funding", 0) or 0)
-                    # rate is hourly funding rate; annualise to match other adapters
                     return FundingRate(rate=rate, apr=rate * 365 * 24 * 100)
             return None
         return await asyncio.to_thread(_sync)
@@ -163,15 +168,30 @@ class HyperliquidAdapter(ExchangeAdapter):
         coin = symbol.upper()
         def _sync():
             info = self._get_info()
-            meta = info.meta()
-            for entry in meta["universe"]:
+            meta, asset_ctxs = info.meta_and_asset_ctxs()
+            universe = meta["universe"]
+            for i, entry in enumerate(universe):
                 if entry["name"].upper() == coin:
                     sz_decimals = entry.get("szDecimals", 2)
                     size_step = float(10 ** -sz_decimals)
-                    # Hyperliquid perps use 0.01 price tick for most assets;
-                    # derive from pxDecimals metadata if present
-                    px_decimals = entry.get("pxDecimals")
-                    price_tick = float(10 ** -px_decimals) if px_decimals else 0.01
+                    # Derive price tick from L2 snapshot level gaps
+                    price_tick = 0.01
+                    try:
+                        snapshot = info.l2_snapshot(coin)
+                        levels = snapshot.get("levels", [])
+                        if levels and len(levels) >= 2:
+                            bids = levels[0][:10]
+                            px_values = [float(b["px"]) for b in bids]
+                            min_diff = None
+                            for j in range(1, len(px_values)):
+                                diff = abs(px_values[j] - px_values[j - 1])
+                                if diff > 0 and (min_diff is None or diff < min_diff):
+                                    min_diff = diff
+                            if min_diff is not None:
+                                price_tick = float(f"{min_diff:.10g}")
+                                price_tick = max(price_tick, 1e-8)
+                    except Exception:
+                        pass  # fall back to 0.01
                     return MarketDetails(
                         market_id=coin,
                         price_tick=price_tick,
@@ -192,6 +212,10 @@ class HyperliquidAdapter(ExchangeAdapter):
 
         coin = str(market_id) if market_id else symbol.upper()
         is_buy = side == "buy"
+        # Round price to avoid floating-point artifacts that HL SDK rejects
+        md = await self.get_market_details(symbol)
+        tick_decimals = max(0, int(round(-__import__("math").log10(md.price_tick))))
+        px = round(price, tick_decimals)
 
         def _sync():
             exchange = self._get_exchange()
@@ -199,7 +223,7 @@ class HyperliquidAdapter(ExchangeAdapter):
                 name=coin,
                 is_buy=is_buy,
                 sz=size_base,
-                limit_px=price,
+                limit_px=px,
                 order_type=OrderType(limit={"tif": "Gtc"}),
                 reduce_only=False,
             )

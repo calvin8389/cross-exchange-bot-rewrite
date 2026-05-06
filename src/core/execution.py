@@ -92,24 +92,22 @@ async def open_position(
     long_side, short_side = "buy", "sell"
 
     # Prices (aggressive to ensure fill)
-    tick = max(long_md.price_tick, short_md.price_tick)
-    long_price = cross_price("buy", opp.long_leg.bid, opp.long_leg.ask, tick=tick, cross_pct=config.cross_pct)
-    short_price = cross_price("sell", opp.short_leg.bid, opp.short_leg.ask, tick=tick, cross_pct=config.cross_pct)
+    long_price = cross_price("buy", opp.long_leg.bid, opp.long_leg.ask, tick=long_md.price_tick, cross_pct=config.cross_pct)
+    short_price = cross_price("sell", opp.short_leg.bid, opp.short_leg.ask, tick=short_md.price_tick, cross_pct=config.cross_pct)
 
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
     # ---- 2. Insert cycle record ----------------------------------------
     from src.util.time import utc_now_iso
 
-    await store.conn.execute(
+    row = await store.conn.execute(
         """INSERT INTO cycles(symbol, state, direction, exchange_long, exchange_short, leverage, created_at, updated_at)
-           VALUES(?,?,?,?,?,?,?,?)""",
+           VALUES(?,?,?,?,?,?,?,?) RETURNING id""",
         (opp.symbol, "OPENING", opp.direction, opp.long_leg.exchange_id, opp.short_leg.exchange_id,
          config.leverage, utc_now_iso(), utc_now_iso()),
     )
-    await store.conn.commit()
-    row = await store.conn.execute("SELECT last_insert_rowid()")
     cycle_id = (await row.fetchone())[0]
+    await store.conn.commit()
 
     await store.append_event(Event(
         level="info", event_type="OPENING_START", cycle_id=cycle_id,
@@ -166,6 +164,40 @@ async def open_position(
         await _fail_cycle(store, cycle_id, "Both legs failed")
         raise RuntimeError(f"Both legs failed: long={long_err}, short={short_err}")
 
+    # Treat None return (silent failure, no exception) as failure
+    long_order_id = long_order_result.order_id if long_order_result else None
+    short_order_id = short_order_result.order_id if short_order_result else None
+
+    if not long_order_id and not long_err:
+        logger.error("Long leg (%s) returned None, rolling back", opp.long_leg.exchange_id)
+        await short_adapter.close_position(
+            symbol=opp.symbol, side="buy", size_base=size_base, price=short_price,
+            market_id=short_market_id,
+        )
+        try:
+            await long_adapter.close_position(
+                symbol=opp.symbol, side="sell", size_base=size_base, price=long_price,
+            )
+        except Exception:
+            pass
+        await _fail_cycle(store, cycle_id, f"Long leg ({opp.long_leg.exchange_id}) returned None")
+        raise RuntimeError(f"Long leg ({opp.long_leg.exchange_id}) returned None")
+
+    if not short_order_id and not short_err:
+        logger.error("Short leg (%s) returned None, rolling back", opp.short_leg.exchange_id)
+        await long_adapter.close_position(
+            symbol=opp.symbol, side="sell", size_base=size_base, price=long_price,
+        )
+        try:
+            await short_adapter.close_position(
+                symbol=opp.symbol, side="buy", size_base=size_base, price=short_price,
+                market_id=short_market_id,
+            )
+        except Exception:
+            pass
+        await _fail_cycle(store, cycle_id, f"Short leg ({opp.short_leg.exchange_id}) returned None")
+        raise RuntimeError(f"Short leg ({opp.short_leg.exchange_id}) returned None")
+
     # ---- 5. Confirm positions exist ------------------------------------
     confirmed = await _confirm_positions(
         long_adapter, short_adapter, opp.symbol, config,
@@ -181,17 +213,16 @@ async def open_position(
         raise RuntimeError("Position confirmation failed, both legs closed")
 
     # ---- 6. Insert position record + legs ------------------------------
-    await store.conn.execute(
+    pos_row = await store.conn.execute(
         """INSERT INTO positions(cycle_id, symbol, is_active,
            exchange_long, exchange_short,
            opened_at, updated_at)
-           VALUES(?,?,1,?,?,?,?)""",
+           VALUES(?,?,1,?,?,?,?) RETURNING id""",
         (cycle_id, opp.symbol, opp.long_leg.exchange_id, opp.short_leg.exchange_id,
          utc_now_iso(), utc_now_iso()),
     )
-    await store.conn.commit()
-    pos_row = await store.conn.execute("SELECT last_insert_rowid()")
     position_id = (await pos_row.fetchone())[0]
+    await store.conn.commit()
 
     # Insert leg records (entry_price may be updated below with actual fill)
     await store.conn.execute(
@@ -354,9 +385,8 @@ async def close_position(
         long_adapter.get_best_bid_ask(long_market_id),
         short_adapter.get_best_bid_ask(short_market_id),
     )
-    tick = max(long_md.price_tick, short_md.price_tick)
-    long_close_px = cross_price("sell", long_bba.bid, long_bba.ask, tick=tick, cross_pct=config.cross_pct)
-    short_close_px = cross_price("buy", short_bba.bid, short_bba.ask, tick=tick, cross_pct=config.cross_pct)
+    long_close_px = cross_price("sell", long_bba.bid, long_bba.ask, tick=long_md.price_tick, cross_pct=config.cross_pct)
+    short_close_px = cross_price("buy", short_bba.bid, short_bba.ask, tick=short_md.price_tick, cross_pct=config.cross_pct)
 
     await store.append_event(Event(
         level="info", event_type="CLOSING_START", cycle_id=cycle_id,
@@ -370,22 +400,46 @@ async def close_position(
         if attempt > 0:
             wider_pct = config.cross_pct * (1.0 + attempt * 0.5)
             logger.warning("Close retry %d/2 with cross_pct=%.1f%%", attempt, wider_pct)
-            long_close_px = cross_price("sell", long_bba.bid, long_bba.ask, tick=0.01, cross_pct=wider_pct)
-            short_close_px = cross_price("buy", short_bba.bid, short_bba.ask, tick=0.01, cross_pct=wider_pct)
 
-        close_results = await asyncio.gather(
-            long_adapter.close_position(symbol=symbol, side=close_long_side,
-                                        size_base=long_leg["size"], price=long_close_px),
-            short_adapter.close_position(symbol=symbol, side=close_short_side,
-                                         size_base=short_leg["size"], price=short_close_px,
-                                         market_id=short_market_id),
-            return_exceptions=True,
+        # Check which legs are still open; only retry those
+        long_positions, short_positions = await asyncio.gather(
+            long_adapter.get_open_positions(),
+            short_adapter.get_open_positions(),
         )
+        long_still_open = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in long_positions)
+        short_still_open = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in short_positions)
+
+        if not long_still_open and not short_still_open:
+            closed = True
+            break
+
+        close_tasks = []
+        if long_still_open:
+            if attempt > 0:
+                bba = await long_adapter.get_best_bid_ask(long_market_id)
+                long_close_px = cross_price("sell", bba.bid, bba.ask, tick=long_md.price_tick, cross_pct=wider_pct)
+            close_tasks.append(
+                long_adapter.close_position(symbol=symbol, side=close_long_side,
+                                            size_base=long_leg["size"], price=long_close_px)
+            )
+        if short_still_open:
+            if attempt > 0:
+                bba = await short_adapter.get_best_bid_ask(short_market_id)
+                short_close_px = cross_price("buy", bba.bid, bba.ask, tick=short_md.price_tick, cross_pct=wider_pct)
+            close_tasks.append(
+                short_adapter.close_position(symbol=symbol, side=close_short_side,
+                                             size_base=short_leg["size"], price=short_close_px,
+                                             market_id=short_market_id)
+            )
+
+        close_results = []
+        if close_tasks:
+            close_results = await asyncio.gather(*close_tasks, return_exceptions=True)
 
         if await _confirm_flat(long_adapter, short_adapter, symbol, config):
             closed = True
-            final_long_close_result = close_results[0] if not isinstance(close_results[0], Exception) else None
-            final_short_close_result = close_results[1] if not isinstance(close_results[1], Exception) else None
+            final_long_close_result = close_results[0] if close_results and not isinstance(close_results[0], Exception) else None
+            final_short_close_result = close_results[-1] if close_results and not isinstance(close_results[-1], Exception) else None
             break
 
     if not closed:

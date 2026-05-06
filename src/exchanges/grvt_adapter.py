@@ -223,15 +223,17 @@ class GrvtAdapter(ExchangeAdapter):
                 amount=size_base,
                 price=price,
                 params={
-                    "post_only": True,
                     "order_duration_secs": 30 * 86400 - 1,
                 },
             )
             if not result:
                 logger.error("GRVT order returned None")
                 return None
-            oid = result.get("id") or result.get("order_id", "")
-            logger.info("GRVT order placed: %s %s %s @ %s", contract, side, size_base, price)
+            # SDK returns {"result": {"order_id": "0x...", "state": {...}}}
+            inner = result.get("result", result)
+            oid = inner.get("order_id", "")
+            logger.info("GRVT order placed: %s %s %s @ %s order_id=%s",
+                        contract, side, size_base, price, oid)
             return OrderResult(order_id=str(oid) if oid else None)
 
         return await asyncio.to_thread(_sync)
@@ -246,7 +248,7 @@ class GrvtAdapter(ExchangeAdapter):
             client = self._get_client()
             result = client.create_order(
                 symbol=contract,
-                type="market",
+                order_type="market",
                 side=side,
                 amount=size_base,
                 params={"reduce_only": True},
@@ -276,6 +278,13 @@ class GrvtAdapter(ExchangeAdapter):
         from src.exchanges.base import FundingPayment
 
         instrument = str(market_id) if market_id else symbol.upper()
+        # Resolve short symbol names to full instrument (e.g. "BCH" → "BCH_USDT_Perp")
+        if "_" not in instrument:
+            try:
+                m = self._find_market(symbol)
+                instrument = m.get("instrument", instrument)
+            except Exception:
+                pass
 
         def _sync():
             client = self._get_client()
@@ -289,11 +298,15 @@ class GrvtAdapter(ExchangeAdapter):
             else:
                 since_dt = datetime.fromisoformat(since_ts.replace("Z", "+00:00"))
 
-            start_ms = int(since_dt.timestamp() * 1000)
-            end_ms = int(until_dt.timestamp() * 1000)
+            # SDK expects nanoseconds, limit=1000, end_time in params
+            since_ns = int(since_dt.timestamp() * 1_000_000_000)
+            end_ns = int(until_dt.timestamp() * 1_000_000_000)
 
             try:
-                history = client.fetch_funding_rate_history(instrument, start_ms, end_ms)
+                history = client.fetch_funding_rate_history(
+                    instrument, since_ns, limit=1000,
+                    params={"end_time": end_ns},
+                )
             except Exception:
                 return []
 
