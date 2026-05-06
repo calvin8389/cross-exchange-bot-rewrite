@@ -92,9 +92,8 @@ async def open_position(
     long_side, short_side = "buy", "sell"
 
     # Prices (aggressive to ensure fill)
-    tick = max(long_md.price_tick, short_md.price_tick)
-    long_price = cross_price("buy", opp.long_leg.bid, opp.long_leg.ask, tick=tick, cross_pct=config.cross_pct)
-    short_price = cross_price("sell", opp.short_leg.bid, opp.short_leg.ask, tick=tick, cross_pct=config.cross_pct)
+    long_price = cross_price("buy", opp.long_leg.bid, opp.long_leg.ask, tick=long_md.price_tick, cross_pct=config.cross_pct)
+    short_price = cross_price("sell", opp.short_leg.bid, opp.short_leg.ask, tick=short_md.price_tick, cross_pct=config.cross_pct)
 
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -289,9 +288,8 @@ async def close_position(
         long_adapter.get_best_bid_ask(long_market_id),
         short_adapter.get_best_bid_ask(short_market_id),
     )
-    tick = max(long_md.price_tick, short_md.price_tick)
-    long_close_px = cross_price("sell", long_bba.bid, long_bba.ask, tick=tick, cross_pct=config.cross_pct)
-    short_close_px = cross_price("buy", short_bba.bid, short_bba.ask, tick=tick, cross_pct=config.cross_pct)
+    long_close_px = cross_price("sell", long_bba.bid, long_bba.ask, tick=long_md.price_tick, cross_pct=config.cross_pct)
+    short_close_px = cross_price("buy", short_bba.bid, short_bba.ask, tick=short_md.price_tick, cross_pct=config.cross_pct)
 
     await store.append_event(Event(
         level="info", event_type="CLOSING_START", cycle_id=cycle_id,
@@ -307,8 +305,8 @@ async def close_position(
                 long_adapter.get_best_bid_ask(long_market_id),
                 short_adapter.get_best_bid_ask(short_market_id),
             )
-            long_close_px = cross_price("sell", long_bba.bid, long_bba.ask, tick=tick, cross_pct=wider_pct)
-            short_close_px = cross_price("buy", short_bba.bid, short_bba.ask, tick=tick, cross_pct=wider_pct)
+            long_close_px = cross_price("sell", long_bba.bid, long_bba.ask, tick=long_md.price_tick, cross_pct=wider_pct)
+            short_close_px = cross_price("buy", short_bba.bid, short_bba.ask, tick=short_md.price_tick, cross_pct=wider_pct)
 
         await asyncio.gather(
             long_adapter.close_position(symbol=symbol, side=close_long_side,

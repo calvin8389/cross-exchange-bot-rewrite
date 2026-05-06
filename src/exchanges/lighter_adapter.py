@@ -39,7 +39,6 @@ class LighterAdapter(ExchangeAdapter):
     # ------------------------------------------------------------------
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
-        await self._rate_limiter.acquire()
         if self._session is None:
             self._session = aiohttp.ClientSession()
         return self._session
@@ -60,6 +59,7 @@ class LighterAdapter(ExchangeAdapter):
         url = f"{self.rest_url}/api/v1/account"
         params = {"by": "index", "value": str(self.account_index)}
         try:
+            await self._rate_limiter.acquire()
             async with session.get(url, params=params) as resp:
                 if resp.status != 200:
                     raise RuntimeError(f"Lighter account HTTP {resp.status}")
@@ -84,6 +84,7 @@ class LighterAdapter(ExchangeAdapter):
         url = f"{self.rest_url}/api/v1/orderBookOrders"
         params = {"market_id": str(market_id), "limit": "1"}
         try:
+            await self._rate_limiter.acquire()
             async with session.get(url, params=params) as resp:
                 if resp.status != 200:
                     raise RuntimeError(f"Lighter order book HTTP {resp.status}")
@@ -116,6 +117,7 @@ class LighterAdapter(ExchangeAdapter):
         session = await self._ensure_session()
         url = f"{self.rest_url}/api/v1/funding-rates"
         try:
+            await self._rate_limiter.acquire()
             async with session.get(url) as resp:
                 if resp.status != 200:
                     logger.warning("Lighter funding rates HTTP %s", resp.status)
@@ -149,6 +151,7 @@ class LighterAdapter(ExchangeAdapter):
         url = f"{self.rest_url}/api/v1/account"
         params = {"by": "index", "value": str(self.account_index)}
         try:
+            await self._rate_limiter.acquire()
             async with session.get(url, params=params) as resp:
                 if resp.status != 200:
                     logger.warning("Lighter account HTTP %s", resp.status)
@@ -191,6 +194,7 @@ class LighterAdapter(ExchangeAdapter):
         session = await self._ensure_session()
         url = f"{self.rest_url}/api/v1/orderBooks"
         try:
+            await self._rate_limiter.acquire()
             async with session.get(url) as resp:
                 if resp.status != 200:
                     raise RuntimeError(f"Lighter orderBooks HTTP {resp.status}")

@@ -89,7 +89,13 @@ async def scan_all(
 
         return opportunities
 
-    tasks = [_scan_one(s) for s in config.symbols]
+    sem = asyncio.Semaphore(4)  # limit concurrent symbol scans to avoid overloading SDKs
+
+    async def _scan_one_sem(symbol: str) -> list[Opportunity]:
+        async with sem:
+            return await _scan_one(symbol)
+
+    tasks = [_scan_one_sem(s) for s in config.symbols]
     results = await asyncio.gather(*tasks)
 
     candidates: list[Opportunity] = []

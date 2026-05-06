@@ -163,15 +163,24 @@ class HyperliquidAdapter(ExchangeAdapter):
         coin = symbol.upper()
         def _sync():
             info = self._get_info()
-            meta = info.meta()
-            for entry in meta["universe"]:
+            meta, asset_ctxs = info.meta_and_asset_ctxs()
+            universe = meta["universe"]
+            for i, entry in enumerate(universe):
                 if entry["name"].upper() == coin:
                     sz_decimals = entry.get("szDecimals", 2)
                     size_step = float(10 ** -sz_decimals)
-                    # Hyperliquid perps use 0.01 price tick for most assets;
-                    # derive from pxDecimals metadata if present
-                    px_decimals = entry.get("pxDecimals")
-                    price_tick = float(10 ** -px_decimals) if px_decimals else 0.01
+                    # Derive price tick from mark price or impact prices
+                    price_tick = 0.01
+                    if i < len(asset_ctxs):
+                        ctx = asset_ctxs[i]
+                        mark_px = ctx.get("markPx")
+                        if mark_px:
+                            mark_str = str(mark_px)
+                            if "." in mark_str:
+                                decimals = len(mark_str.split(".")[1])
+                                price_tick = float(10 ** -decimals)
+                            else:
+                                price_tick = 1.0
                     return MarketDetails(
                         market_id=coin,
                         price_tick=price_tick,
@@ -232,6 +241,8 @@ class HyperliquidAdapter(ExchangeAdapter):
 
         coin = str(market_id) if market_id else symbol.upper()
         is_buy = side == "buy"
+        # Cross by one tick to increase fill probability
+        px = price + 0.01 if is_buy else price - 0.01
 
         def _sync():
             exchange = self._get_exchange()
@@ -239,7 +250,7 @@ class HyperliquidAdapter(ExchangeAdapter):
                 name=coin,
                 is_buy=is_buy,
                 sz=size_base,
-                limit_px=price,
+                limit_px=round(px, 2),
                 order_type=OrderType(limit={"tif": "Ioc"}),
                 reduce_only=True,
             )
