@@ -17,10 +17,14 @@ class EdgeXAdapter(ExchangeAdapter):
     positions, order placement) use the edgex-python-sdk when available.
     """
 
+    @property
+    def exchange_id(self) -> str:
+        return "edgex"
+
     def __init__(self, base_url: str, account_id: int, private_key: str):
         self.base_url = base_url.rstrip("/")
         self.account_id = account_id       # MUST be int (SDK requirement)
-        self.private_key = private_key
+        self.private_key = private_key.removeprefix("0x").removeprefix("0X")
         self._session: Optional[aiohttp.ClientSession] = None
         self._contracts_by_name: dict[str, str] = {}  # "BTC" → "10000001"
 
@@ -76,25 +80,24 @@ class EdgeXAdapter(ExchangeAdapter):
     # ------------------------------------------------------------------
 
     async def get_balance(self) -> Balance:
-        session = await self._ensure_session()
-        url = f"{self.base_url}/api/v1/private/account/asset"
         try:
-            async with session.get(
-                url,
-                params={"accountId": self.account_id},
-            ) as resp:
-                if resp.status != 200:
-                    raise RuntimeError(f"EdgeX balance HTTP {resp.status}")
-                data = await resp.json()
-                assets = data.get("collateralAssetModelList", [])
-                total = 0.0
-                avail = 0.0
-                for a in assets:
-                    total += float(a.get("totalEquity", 0) or 0)
-                    avail += float(a.get("availableAmount", 0) or 0)
+            from edgex_sdk import Client as EdgeXClient  # noqa: F811
+
+            client = EdgeXClient(
+                base_url=self.base_url,
+                account_id=self.account_id,
+                stark_private_key=self.private_key,
+            )
+            try:
+                asset = await client.get_account_asset()
+                assets = asset.get("data", {}).get("collateralAssetModelList", [])
+                total = sum(float(a.get("totalEquity", 0) or 0) for a in assets)
+                avail = sum(float(a.get("availableAmount", 0) or 0) for a in assets)
                 return Balance(total_equity=total, available=avail)
-        except Exception as e:
-            logger.warning("EdgeX balance fetch failed: %s", e)
+            finally:
+                await client.close()
+        except ImportError:
+            logger.warning("edgex-python-sdk not installed")
             raise
 
     # ------------------------------------------------------------------
@@ -157,7 +160,8 @@ class EdgeXAdapter(ExchangeAdapter):
                 else:
                     ticker = {}
                 rate = float(ticker.get("fundingRate", 0) or 0)
-                return FundingRate(rate=rate, apr=rate * 365 * 24 * 100)
+                # EdgeX funding is every 4 hours → 6 periods per day
+                return FundingRate(rate=rate, apr=rate * 365 * 6 * 100)
         except Exception as e:
             logger.warning("EdgeX funding rate fetch failed: %s", e)
             return None
@@ -167,28 +171,52 @@ class EdgeXAdapter(ExchangeAdapter):
     # ------------------------------------------------------------------
 
     async def get_open_positions(self) -> list[PositionInfo]:
-        session = await self._ensure_session()
-        url = f"{self.base_url}/api/v1/private/account/positions"
         try:
-            async with session.get(
-                url,
-                params={"accountId": self.account_id},
-            ) as resp:
-                if resp.status != 200:
-                    logger.warning("EdgeX positions HTTP %s", resp.status)
-                    return []
-                data = await resp.json()
+            from edgex_sdk import Client as EdgeXClient  # noqa: F811
+
+            client = EdgeXClient(
+                base_url=self.base_url,
+                account_id=self.account_id,
+                stark_private_key=self.private_key,
+            )
+            try:
+                result = await client.get_account_positions()
+                inner = result.get("data", {})
+
+                # Build lookup: contractId → {avgEntryPrice, unrealizePnl}
+                asset_lookup: dict[str, dict[str, float]] = {}
+                for a in inner.get("positionAssetList", []):
+                    cid = a.get("contractId", "")
+                    if cid:
+                        asset_lookup[cid] = {
+                            "entry_price": float(a.get("avgEntryPrice", 0) or 0),
+                            "unrealized_pnl": float(a.get("unrealizePnl", 0) or 0),
+                        }
+
+                # Convert contractId to symbol using metadata
+                meta = await self._load_metadata()
+                id_to_name = {v: k for k, v in meta.items()}
+
                 positions = []
-                for p in data.get("positions", []):
-                    size = float(p.get("size", 0) or 0)
-                    if abs(size) > 1e-8:
-                        positions.append(PositionInfo(
-                            symbol=p.get("contractId", "UNKNOWN"),
-                            size=size,
-                            entry_price=float(p.get("entryPrice", 0) or 0),
-                            unrealized_pnl=float(p.get("unrealizedPnl", 0) or 0),
-                        ))
+                for p in inner.get("positionList", []):
+                    size = float(p.get("openSize", 0) or 0)
+                    if abs(size) <= 1e-8:
+                        continue
+                    cid = p.get("contractId", "UNKNOWN")
+                    asset = asset_lookup.get(cid, {})
+                    symbol = id_to_name.get(cid, cid)
+                    positions.append(PositionInfo(
+                        symbol=symbol,
+                        size=size,
+                        entry_price=asset.get("entry_price", 0.0),
+                        unrealized_pnl=asset.get("unrealized_pnl", 0.0),
+                    ))
                 return positions
+            finally:
+                await client.close()
+        except ImportError:
+            logger.warning("edgex-python-sdk not installed")
+            return []
         except Exception as e:
             logger.warning("EdgeX positions fetch failed: %s", e)
             return []
@@ -240,14 +268,19 @@ class EdgeXAdapter(ExchangeAdapter):
             params = CreateOrderParams(
                 contract_id=str(contract_id),
                 side=side_enum,
-                order_type=OrderType.LIMIT,
-                price=price,
-                size=size_base,
-                time_in_force=TimeInForce.GOOD_TILL_TIME,
+                type=OrderType.LIMIT,
+                price=str(price),
+                size=str(size_base),
+                time_in_force=TimeInForce.GOOD_TIL_CANCEL,
             )
             result = await client.create_order(params)
             await client.close()
-            return result.get("orderId") if result else None
+            if not result:
+                return None
+            # Order ID is nested: {"code": "SUCCESS", "data": {"orderId": "..."}}
+            data = result.get("data", {})
+            oid = data.get("orderId", "") if isinstance(data, dict) else result.get("orderId", "")
+            return str(oid) if oid else None
         except ImportError:
             logger.warning("edgex-python-sdk not installed — order placement unavailable")
             return None
@@ -269,15 +302,21 @@ class EdgeXAdapter(ExchangeAdapter):
             params = CreateOrderParams(
                 contract_id=str(contract_id),
                 side=side_enum,
-                order_type=OrderType.LIMIT,
-                price=price,
-                size=size_base,
-                time_in_force=TimeInForce.GOOD_TILL_TIME,
+                type=OrderType.LIMIT,
+                price=str(price),
+                size=str(size_base),
+                time_in_force=TimeInForce.GOOD_TIL_CANCEL,
                 reduce_only=True,
             )
             result = await client.create_order(params)
             await client.close()
-            return result is not None
+            if not result:
+                return False
+            if isinstance(result, dict) and result.get("code") != "SUCCESS":
+                logger.error("EdgeX close error: %s", result)
+                return False
+            logger.info("EdgeX close order placed: %s %s %s @ %s", symbol, side, size_base, price)
+            return True
         except ImportError:
             logger.warning("edgex-python-sdk not installed — close unavailable")
             return False

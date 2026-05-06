@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from itertools import combinations
 from typing import Optional
 
-from src.core.models import Opportunity
+from src.core.models import ExchangeLeg, Opportunity
 from src.exchanges.base import ExchangeAdapter
 
 logger = logging.getLogger(__name__)
@@ -20,112 +21,121 @@ class ScanConfig:
 
 
 async def scan_all(
-    lighter: ExchangeAdapter,
-    edgex: ExchangeAdapter,
+    adapters: dict[str, ExchangeAdapter],
     config: ScanConfig,
 ) -> list[Opportunity]:
-    """Scan all symbols, return filtered opportunities sorted by net APR desc."""
+    """Scan all symbols across all exchange pairs, return opportunities sorted by net APR."""
 
-    async def _scan_one(symbol: str) -> Optional[Opportunity]:
-        try:
-            # Fetch data from both exchanges concurrently
-            (l_funding, l_bba), (e_funding, e_bba) = await asyncio.gather(
-                _fetch_lighter(lighter, symbol),
-                _fetch_edgex(edgex, symbol),
-            )
-        except Exception as e:
-            logger.warning("Scan %s failed: %s", symbol, e)
-            return None
+    async def _scan_one(symbol: str) -> list[Opportunity]:
+        # Fetch data from all exchanges concurrently
+        adapter_ids = list(adapters.keys())
+        tasks = [_fetch_exchange_data(adapters[eid], symbol, eid) for eid in adapter_ids]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        if l_funding is None or e_funding is None:
-            return None
-        if l_bba is None or e_bba is None:
-            return None
+        # Collect successful results: (exchange_id, funding_rate, best_bid_ask)
+        entries: list[tuple[str, ExchangeLeg]] = []
+        for eid, result in zip(adapter_ids, results):
+            if isinstance(result, Exception):
+                logger.warning("Scan %s on %s failed: %s", symbol, eid, result)
+                continue
+            if result is not None:
+                entries.append(result)
 
-        # Spread: difference between exchange mid prices
-        l_mid = (l_bba.bid + l_bba.ask) / 2
-        e_mid = (e_bba.bid + e_bba.ask) / 2
-        if l_mid <= 0 or e_mid <= 0:
-            return None
-        spread_pct = abs(l_mid - e_mid) / min(l_mid, e_mid) * 100
+        # Compare all pairs
+        opportunities: list[Opportunity] = []
+        for (eid_a, leg_a), (eid_b, leg_b) in combinations(entries, 2):
+            # Spread between exchange mid prices
+            mid_a = (leg_a.bid + leg_a.ask) / 2
+            mid_b = (leg_b.bid + leg_b.ask) / 2
+            if mid_a <= 0 or mid_b <= 0:
+                continue
+            spread_pct = abs(mid_a - mid_b) / min(mid_a, mid_b) * 100
 
-        if spread_pct > config.max_spread_pct:
-            return None
+            if spread_pct > config.max_spread_pct:
+                continue
 
-        # Volume (placeholder — adapters will provide this in M4)
-        volume = 0.0
-        if volume < config.min_volume_usd:
-            pass  # volume check is soft for now; adapters don't expose it yet
+            # Net APR
+            net_apr = abs(leg_a.apr - leg_b.apr)
+            if net_apr < config.min_net_apr_threshold:
+                continue
 
-        # Net APR: determine direction
-        edgex_apr = e_funding.apr
-        lighter_apr = l_funding.apr
-        net_apr = abs(edgex_apr - lighter_apr)
+            # Assign long/short: higher APR = long (receive funding), lower APR = short (pay funding)
+            if leg_a.apr >= leg_b.apr:
+                long_leg = ExchangeLeg(
+                    exchange_id=eid_a, side="long",
+                    rate=leg_a.rate, apr=leg_a.apr, bid=leg_a.bid, ask=leg_a.ask,
+                )
+                short_leg = ExchangeLeg(
+                    exchange_id=eid_b, side="short",
+                    rate=leg_b.rate, apr=leg_b.apr, bid=leg_b.bid, ask=leg_b.ask,
+                )
+            else:
+                long_leg = ExchangeLeg(
+                    exchange_id=eid_b, side="long",
+                    rate=leg_b.rate, apr=leg_b.apr, bid=leg_b.bid, ask=leg_b.ask,
+                )
+                short_leg = ExchangeLeg(
+                    exchange_id=eid_a, side="short",
+                    rate=leg_a.rate, apr=leg_a.apr, bid=leg_a.bid, ask=leg_a.ask,
+                )
 
-        if net_apr < config.min_net_apr_threshold:
-            return None
+            opportunities.append(Opportunity(
+                symbol=symbol,
+                long_leg=long_leg,
+                short_leg=short_leg,
+                net_apr=net_apr,
+                spread_pct=spread_pct,
+            ))
 
-        if edgex_apr > lighter_apr:
-            direction = "long_edgex_short_lighter"
-        else:
-            direction = "short_edgex_long_lighter"
-
-        return Opportunity(
-            symbol=symbol,
-            edgex_rate=e_funding.rate,
-            lighter_rate=l_funding.rate,
-            edgex_apr=edgex_apr,
-            lighter_apr=lighter_apr,
-            net_apr=net_apr,
-            volume=volume,
-            spread=spread_pct,
-            direction=direction,
-            edgex_bid=e_bba.bid,
-            edgex_ask=e_bba.ask,
-            lighter_bid=l_bba.bid,
-            lighter_ask=l_bba.ask,
-        )
+        return opportunities
 
     tasks = [_scan_one(s) for s in config.symbols]
     results = await asyncio.gather(*tasks)
 
-    candidates = [r for r in results if r is not None]
+    candidates: list[Opportunity] = []
+    for r in results:
+        candidates.extend(r)
+
     candidates.sort(key=lambda o: o.net_apr, reverse=True)
     return candidates
 
 
 # ---------------------------------------------------------------------------
-# Per-exchange fetchers (internal)
+# Per-exchange fetcher (generic)
 # ---------------------------------------------------------------------------
 
-async def _fetch_lighter(adapter: ExchangeAdapter, symbol: str):
-    """Fetch Lighter funding rate + best bid/ask for a symbol.
+async def _fetch_exchange_data(
+    adapter: ExchangeAdapter,
+    symbol: str,
+    exchange_id: str,
+) -> Optional[tuple[str, ExchangeLeg]]:
+    """Fetch funding rate + best bid/ask for a symbol from one exchange.
 
-    Returns (FundingRate | None, BestBidAsk | None).
+    Returns (exchange_id, ExchangeLeg) or None on failure.
     """
     try:
         md = await adapter.get_market_details(symbol)
     except Exception as e:
-        logger.warning("Lighter market_details failed for %s: %s", symbol, e)
-        return None, None
+        logger.warning("%s market_details failed for %s: %s", exchange_id, symbol, e)
+        return None
 
-    fr, bba = await asyncio.gather(
-        adapter.get_funding_rate(md.market_id),
-        adapter.get_best_bid_ask(md.market_id),
-    )
-    return fr, bba
-
-
-async def _fetch_edgex(adapter: ExchangeAdapter, symbol: str):
-    """Fetch EdgeX funding rate + best bid/ask for a symbol."""
     try:
-        md = await adapter.get_market_details(symbol)
+        fr, bba = await asyncio.gather(
+            adapter.get_funding_rate(md.market_id),
+            adapter.get_best_bid_ask(md.market_id),
+        )
     except Exception as e:
-        logger.warning("EdgeX market_details failed for %s: %s", symbol, e)
-        return None, None
+        logger.warning("%s fetch failed for %s: %s", exchange_id, symbol, e)
+        return None
 
-    fr, bba = await asyncio.gather(
-        adapter.get_funding_rate(md.market_id),
-        adapter.get_best_bid_ask(md.market_id),
+    if fr is None or bba is None:
+        return None
+
+    leg = ExchangeLeg(
+        exchange_id=exchange_id,
+        rate=fr.rate,
+        apr=fr.apr,
+        bid=bba.bid,
+        ask=bba.ask,
     )
-    return fr, bba
+    return (exchange_id, leg)

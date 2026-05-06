@@ -20,17 +20,25 @@ class LighterAdapter(ExchangeAdapter):
     without the SDK).
     """
 
+    @property
+    def exchange_id(self) -> str:
+        return "lighter"
+
     def __init__(self, ws_url: str, rest_url: str, account_index: int):
         self.ws_url = ws_url   # kept for compatibility; no longer used internally
         self.rest_url = rest_url.rstrip("/")
         self.account_index = account_index
         self._session: Optional[aiohttp.ClientSession] = None
+        from src.util.retry import RateLimiter
+        self._rate_limiter = RateLimiter(max_per_minute=35)  # Lighter: 40/min, keep margin
+        self._funding_cache: Optional[tuple[float, dict[int, tuple[float, float]]]] = None
 
     # ------------------------------------------------------------------
     # lifecycle
     # ------------------------------------------------------------------
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
+        await self._rate_limiter.acquire()
         if self._session is None:
             self._session = aiohttp.ClientSession()
         return self._session
@@ -39,6 +47,7 @@ class LighterAdapter(ExchangeAdapter):
         if self._session:
             await self._session.close()
             self._session = None
+        self._funding_cache = None
 
     # ------------------------------------------------------------------
     # Balance (REST)
@@ -94,6 +103,14 @@ class LighterAdapter(ExchangeAdapter):
     # ------------------------------------------------------------------
 
     async def get_funding_rate(self, market_id: int) -> Optional[FundingRate]:
+        import time as _time
+
+        # Return from cache if fresh (< 30s old)
+        if self._funding_cache and _time.monotonic() - self._funding_cache[0] < 30:
+            cached = self._funding_cache[1].get(int(market_id))
+            if cached:
+                return FundingRate(rate=cached[0], apr=cached[1])
+
         session = await self._ensure_session()
         url = f"{self.rest_url}/api/v1/funding-rates"
         try:
@@ -103,10 +120,19 @@ class LighterAdapter(ExchangeAdapter):
                     return None
                 data = await resp.json()
                 rates = data.get("funding_rates") or []
+                cache: dict[int, tuple[float, float]] = {}
                 for r in rates:
-                    if int(r.get("market_id", -1)) == market_id:
-                        rate = float(r.get("rate", 0))
-                        return FundingRate(rate=rate, apr=rate * 365 * 24 * 100)
+                    mid = int(r.get("market_id", -1))
+                    rate = float(r.get("rate", 0))
+                    # Lighter funding rates are sourced from Binance (8-hour interval)
+                    # → 3 periods per day
+                    cache[mid] = (rate, rate * 365 * 3 * 100)
+
+                self._funding_cache = (_time.monotonic(), cache)
+
+                if int(market_id) in cache:
+                    r, apr = cache[int(market_id)]
+                    return FundingRate(rate=r, apr=apr)
                 return None
         except Exception as e:
             logger.warning("Lighter funding rate fetch failed: %s", e)
@@ -182,7 +208,7 @@ class LighterAdapter(ExchangeAdapter):
 
         base_url = self.rest_url
         private_key = _lighter_private_key()
-        api_key_index = 0  # default
+        api_key_index = int(os.environ.get("LIGHTER_API_KEY_INDEX", os.environ.get("API_KEY_INDEX", "0")))
         mid = int(market_id) if market_id else 0
 
         md = await self.get_market_details(symbol)
@@ -206,6 +232,7 @@ class LighterAdapter(ExchangeAdapter):
                 time_in_force=signer.ORDER_TIME_IN_FORCE_GOOD_TILL_TIME,
                 reduce_only=0,
                 trigger_price=0,
+                api_key_index=api_key_index,
             )
             if err:
                 logger.error("Lighter order error: %s", err)
@@ -215,6 +242,76 @@ class LighterAdapter(ExchangeAdapter):
         finally:
             await signer.close()
 
+    # ------------------------------------------------------------------
+    # Funding history (authenticated)
+    # ------------------------------------------------------------------
+
+    async def get_funding_history(
+        self, symbol: str, market_id: int | str | None = None,
+        since_ts: str | None = None, until_ts: str | None = None,
+    ) -> list:
+        from datetime import datetime, timezone
+        from src.exchanges.base import FundingPayment
+
+        mid = int(market_id) if market_id else 0
+        if mid == 0:
+            md = await self.get_market_details(symbol)
+            mid = md.market_id
+
+        # Build auth token
+        import lighter
+        private_key = _lighter_private_key()
+        if not private_key:
+            return []
+
+        api_key_index = int(os.environ.get("LIGHTER_API_KEY_INDEX", os.environ.get("API_KEY_INDEX", "0")))
+        signer = lighter.SignerClient(
+            url=self.rest_url,
+            account_index=self.account_index,
+            api_private_keys={api_key_index: private_key},
+        )
+        try:
+            auth_token, err = signer.create_auth_token_with_expiry(api_key_index=api_key_index)
+            if err:
+                logger.warning("Lighter auth failed for funding history: %s", err)
+                return []
+        finally:
+            await signer.close()
+
+        session = await self._ensure_session()
+        params: dict = {
+            "account_index": self.account_index,
+            "market_id": mid,
+            "limit": 100,
+        }
+        headers = {"authorization": auth_token}
+
+        try:
+            async with session.get(
+                f"{self.rest_url}/api/v1/positionFunding",
+                params=params, headers=headers,
+            ) as resp:
+                if resp.status != 200:
+                    logger.warning("Lighter positionFunding HTTP %s", resp.status)
+                    return []
+                data = await resp.json()
+        except Exception as e:
+            logger.warning("Lighter positionFunding fetch failed: %s", e)
+            return []
+
+        payments = []
+        entries = data if isinstance(data, list) else data.get("fundings", data.get("data", []))
+        for entry in entries:
+            ts_val = entry.get("time") or entry.get("created_at") or entry.get("timestamp", "")
+            rate = float(entry.get("funding_rate", entry.get("rate", 0)) or 0)
+            amount = float(entry.get("amount", entry.get("funding", 0)) or 0)
+            payments.append(FundingPayment(
+                ts=str(ts_val),
+                amount=amount,
+                rate=rate,
+            ))
+        return payments
+
     async def close_position(
         self, symbol: str, side: str, size_base: float,
         price: float, market_id: int | str | None = None,
@@ -223,7 +320,7 @@ class LighterAdapter(ExchangeAdapter):
 
         base_url = self.rest_url
         private_key = _lighter_private_key()
-        api_key_index = 0
+        api_key_index = int(os.environ.get("LIGHTER_API_KEY_INDEX", os.environ.get("API_KEY_INDEX", "0")))
         mid = int(market_id) if market_id else 0
 
         md = await self.get_market_details(symbol)
@@ -247,6 +344,7 @@ class LighterAdapter(ExchangeAdapter):
                 time_in_force=signer.ORDER_TIME_IN_FORCE_GOOD_TILL_TIME,
                 reduce_only=1,
                 trigger_price=0,
+                api_key_index=api_key_index,
             )
             if err:
                 logger.error("Lighter close error: %s", err)

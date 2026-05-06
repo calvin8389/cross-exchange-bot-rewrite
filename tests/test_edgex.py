@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""EdgeX adapter smoke test — public data + account data.
+"""EdgeX adapter smoke test — public data + account data + order placement.
 
 Usage:
   python tests/test_edgex.py              # all checks
   python tests/test_edgex.py --public     # public data only (no auth)
   python tests/test_edgex.py --account    # account data only
+  python tests/test_edgex.py --order      # order placement only (buy ~100 USDC BTC)
 """
 
 from __future__ import annotations
@@ -200,6 +201,84 @@ async def test_account(contract: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# order placement
+# ---------------------------------------------------------------------------
+
+async def test_order(contract: str, notional: float) -> None:
+    _header(f"EdgeX Order Placement — BUY ~{notional:.0f} USDC {contract}")
+
+    from edgex_sdk import Client as EdgeXClient, CreateOrderParams, OrderSide, OrderType, TimeInForce
+
+    base_url = _get_env_or_die("EDGEX_BASE_URL")
+    account_id = int(_get_env_or_die("EDGEX_ACCOUNT_ID"))
+    private_key = _get_env_or_die("EDGEX_STARK_PRIVATE_KEY")
+    if private_key.startswith("0x") or private_key.startswith("0X"):
+        private_key = private_key[2:]
+
+    client = EdgeXClient(
+        base_url=base_url,
+        account_id=account_id,
+        stark_private_key=private_key,
+    )
+
+    try:
+        # 1. Metadata → find contract
+        meta = await client.get_metadata()
+        contracts = meta.get("data", {}).get("contractList", [])
+        target = next((c for c in contracts if c.get("contractName") == contract), None)
+        if not target:
+            _fail("contract lookup", f"{contract} not found in metadata")
+            return
+        contract_id = target["contractId"]
+        price_tick = float(target.get("tickSize", 0.01) or 0.01)
+        size_step = float(target.get("stepSize", 0.001) or 0.001)
+        _ok("contract", f"{contract} -> id={contract_id} tick={price_tick} step={size_step}")
+
+        # 2. Best ask from order book depth
+        from edgex_sdk import GetOrderBookDepthParams
+        depth = await client.quote.get_order_book_depth(
+            GetOrderBookDepthParams(contract_id=contract_id, limit=15)
+        )
+        ob_data = depth.get("data", [{}])[0]
+        asks = ob_data.get("asks", [])
+        if not asks:
+            _fail("order book", "no asks available")
+            return
+        best_ask = float(asks[0].get("price", 0))
+        _ok("best ask", str(best_ask))
+
+        # 3. Calculate size for ~notional USDC
+        raw_size = notional / best_ask
+        base_scaled = max(1, int(raw_size / size_step))
+        size_base = base_scaled * size_step
+        actual_notional = size_base * best_ask
+
+        print(f"      target notional: ~{notional} USDC")
+        print(f"      size: {size_base} {contract}  price: {best_ask}  actual: ~{actual_notional:.2f} USDC")
+
+        # 4. Place limit buy order
+        params = CreateOrderParams(
+            contract_id=contract_id,
+            side=OrderSide.BUY,
+            type=OrderType.LIMIT,
+            price=str(best_ask),
+            size=str(size_base),
+            time_in_force=TimeInForce.GOOD_TIL_CANCEL,
+        )
+        result = await client.create_order(params)
+        data = result.get("data", {}) if result else {}
+        oid = data.get("orderId", "") if isinstance(data, dict) else (result or {}).get("orderId", "")
+        if oid:
+            _ok("order placed", f"order_id={oid}")
+        else:
+            _fail("order", f"returned {result}")
+    except Exception as e:
+        _fail("order", str(e))
+    finally:
+        await client.close()
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -207,16 +286,21 @@ async def _main() -> None:
     parser = argparse.ArgumentParser(description="EdgeX adapter smoke test")
     parser.add_argument("--public", action="store_true", help="Public data only")
     parser.add_argument("--account", action="store_true", help="Account data only")
-    parser.add_argument("--contract", default="BTCUSD", help="Contract ID (default: BTCUSD)")
+    parser.add_argument("--order", action="store_true", help="Order placement only")
+    parser.add_argument("--contract", default="BTCUSD", help="Contract name (default: BTCUSD)")
+    parser.add_argument("--notional", type=float, default=100.0, help="Order notional in USDC (default: 100)")
     args = parser.parse_args()
 
-    run_all = not args.public and not args.account
+    run_all = not args.public and not args.account and not args.order
 
     if run_all or args.public:
         await test_public(args.contract)
 
     if run_all or args.account:
         await test_account(args.contract)
+
+    if run_all or args.order:
+        await test_order(args.contract, args.notional)
 
 
 if __name__ == "__main__":

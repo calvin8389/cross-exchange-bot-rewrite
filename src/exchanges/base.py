@@ -32,6 +32,15 @@ class PositionInfo:
 
 
 @dataclass
+class FundingPayment:
+    """A single funding payment recorded by the exchange."""
+    ts: str           # ISO-8601 timestamp
+    amount: float     # signed USD amount (+ received, - paid)
+    rate: float       # funding rate for this interval
+    position_size: float = 0.0
+
+
+@dataclass
 class MarketDetails:
     market_id: int | str   # int for Lighter, str for EdgeX
     price_tick: float
@@ -39,14 +48,18 @@ class MarketDetails:
 
 
 class ExchangeAdapter(ABC):
+    @property
+    @abstractmethod
+    def exchange_id(self) -> str: ...
+
     @abstractmethod
     async def get_balance(self) -> Balance: ...
 
     @abstractmethod
-    async def get_best_bid_ask(self, market_id: int) -> BestBidAsk: ...
+    async def get_best_bid_ask(self, market_id: int | str) -> BestBidAsk: ...
 
     @abstractmethod
-    async def get_funding_rate(self, market_id: int) -> Optional[FundingRate]: ...
+    async def get_funding_rate(self, market_id: int | str) -> Optional[FundingRate]: ...
 
     @abstractmethod
     async def get_open_positions(self) -> list[PositionInfo]: ...
@@ -68,3 +81,14 @@ class ExchangeAdapter(ABC):
 
     @abstractmethod
     async def close(self) -> None: ...
+
+    async def get_funding_history(
+        self, symbol: str, market_id: int | str | None = None,
+        since_ts: str | None = None, until_ts: str | None = None,
+    ) -> list[FundingPayment]:
+        """Return actual funding payments for a position since a given time.
+
+        Default returns empty — override per exchange if funding history
+        is available.
+        """
+        return []

@@ -10,9 +10,54 @@ from dotenv import load_dotenv
 from src.config import load_bot_config, load_env
 from src.core.orchestrator import Orchestrator
 from src.db.store import Event, Store
+from src.exchanges.base import ExchangeAdapter
+from src.exchanges.edgex_adapter import EdgeXAdapter
+from src.exchanges.lighter_adapter import LighterAdapter
 from src.logging_ import setup_logging
 
 logger = logging.getLogger(__name__)
+
+
+def _build_adapters(env) -> dict[str, ExchangeAdapter]:
+    """Construct exchange adapters based on active_exchanges config."""
+    adapters: dict[str, ExchangeAdapter] = {}
+
+    if "edgex" in env.active_exchanges:
+        adapters["edgex"] = EdgeXAdapter(
+            base_url=env.edgex_base_url,
+            account_id=env.edgex_account_id,
+            private_key=env.edgex_stark_private_key,
+        )
+        logger.info("EdgeX adapter registered")
+
+    if "lighter" in env.active_exchanges:
+        adapters["lighter"] = LighterAdapter(
+            ws_url=env.lighter_ws_url,
+            rest_url=env.lighter_base_url,
+            account_index=env.account_index,
+        )
+        logger.info("Lighter adapter registered")
+
+    if "hyperliquid" in env.active_exchanges:
+        from src.exchanges.hyperliquid_adapter import HyperliquidAdapter
+        adapters["hyperliquid"] = HyperliquidAdapter(
+            base_url=env.hyperliquid_base_url,
+            private_key_hex=env.hyperliquid_private_key,
+            account_address=env.hyperliquid_account_address,
+        )
+        logger.info("Hyperliquid adapter registered")
+
+    if "grvt" in env.active_exchanges:
+        from src.exchanges.grvt_adapter import GrvtAdapter
+        adapters["grvt"] = GrvtAdapter(
+            trading_account_id=env.grvt_trading_account_id,
+            private_key=env.grvt_private_key,
+            api_key=env.grvt_api_key,
+            env=env.grvt_env,
+        )
+        logger.info("GRVT adapter registered")
+
+    return adapters
 
 
 async def main() -> None:
@@ -23,20 +68,34 @@ async def main() -> None:
     await store.start()
     await store.init_schema(Path("src/db/schema.sql").read_text(encoding="utf-8"))
 
-    # Try full orchestrator path; fall back to M1 demo if config incomplete
+    orch = None
     try:
         env = load_env()
         bot_config = load_bot_config("bot_config.json")
-        logger.info("Starting orchestrator with %d symbols", len(bot_config.symbols_to_monitor))
 
-        orch = Orchestrator(env, bot_config, store)
+        adapters = _build_adapters(env)
+        if len(adapters) < 2:
+            raise RuntimeError(f"Need at least 2 active exchanges, got {len(adapters)}")
+
+        logger.info("Starting orchestrator with %d exchanges: %s",
+                    len(adapters), list(adapters.keys()))
+        logger.info("Monitoring %d symbols", len(bot_config.symbols_to_monitor))
+
+        orch = Orchestrator(adapters, bot_config, store)
         await store.kv_set("state", "BOOT")
-        await store.append_event(Event(level="info", event_type="BOOT", data={"mode": "orchestrator"}))
+        await store.append_event(Event(level="info", event_type="BOOT",
+                                       data={"mode": "orchestrator", "exchanges": list(adapters.keys())}))
         await orch.run()
 
     except RuntimeError as e:
         logger.warning("Config incomplete, running M1 demo mode: %s", e)
         await _run_demo(store)
+    except asyncio.CancelledError:
+        logger.info("Received shutdown signal")
+    finally:
+        if orch:
+            await orch.stop()
+        await store.close()
 
 
 async def _run_demo(store: Store) -> None:
@@ -112,4 +171,10 @@ async def _run_demo(store: Store) -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        # Give aiosqlite background thread time to drain
+        import time
+        time.sleep(0.5)

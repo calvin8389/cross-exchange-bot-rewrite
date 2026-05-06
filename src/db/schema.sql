@@ -21,21 +21,25 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
 
--- Cycle ledger (one row per open→close round)
+-- Cycle ledger (one row per open->close round)
 CREATE TABLE IF NOT EXISTS cycles (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   symbol TEXT NOT NULL,
   state TEXT NOT NULL,
   direction TEXT NOT NULL,
-  edgex_size REAL,
-  lighter_size REAL,
-  edgex_entry_price REAL,
-  lighter_entry_price REAL,
+  exchange_long TEXT NOT NULL,
+  exchange_short TEXT NOT NULL,
+  long_size REAL,
+  short_size REAL,
+  long_entry_price REAL,
+  short_entry_price REAL,
+  long_close_pnl REAL DEFAULT 0.0,
+  short_close_pnl REAL DEFAULT 0.0,
+  long_funding_pnl REAL DEFAULT 0.0,
+  short_funding_pnl REAL DEFAULT 0.0,
+  leverage INTEGER,
   opened_at TEXT,
   closed_at TEXT,
-  edgex_close_pnl REAL,
-  lighter_close_pnl REAL,
-  leverage INTEGER,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -46,20 +50,48 @@ CREATE TABLE IF NOT EXISTS positions (
   cycle_id INTEGER NOT NULL REFERENCES cycles(id),
   symbol TEXT NOT NULL,
   is_active INTEGER NOT NULL DEFAULT 1,
-  edgex_contract_id TEXT,
-  edgex_side TEXT,
-  edgex_size REAL,
-  edgex_entry_price REAL,
-  edgex_unrealized_pnl REAL,
-  lighter_market_id INTEGER,
-  lighter_side TEXT,
-  lighter_size REAL,
-  lighter_entry_price REAL,
-  lighter_unrealized_pnl REAL,
-  stop_loss_price REAL,
-  target_close_at TEXT,
+  exchange_long TEXT NOT NULL,
+  exchange_short TEXT NOT NULL,
   opened_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_positions_active ON positions(is_active);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_positions_one_active ON positions(is_active) WHERE is_active = 1;
+
+-- Per-leg details (one row per exchange leg of an active position)
+CREATE TABLE IF NOT EXISTS position_legs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  position_id INTEGER NOT NULL REFERENCES positions(id),
+  exchange_id TEXT NOT NULL,
+  side TEXT NOT NULL,
+  size REAL NOT NULL,
+  entry_price REAL NOT NULL,
+  unrealized_pnl REAL DEFAULT 0.0,
+  close_price REAL,
+  market_id TEXT,
+  opened_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_legs_position ON position_legs(position_id);
+
+-- Funding rate snapshots per position leg (recorded each HOLDING check interval)
+CREATE TABLE IF NOT EXISTS funding_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  position_id INTEGER NOT NULL REFERENCES positions(id),
+  exchange_id TEXT NOT NULL,
+  rate REAL NOT NULL,
+  apr REAL NOT NULL,
+  recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_funding_snap_pos ON funding_snapshots(position_id);
+
+-- Actual funding payments settled by exchanges (deduplicated by ts+exchange)
+CREATE TABLE IF NOT EXISTS funding_payments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  position_id INTEGER NOT NULL REFERENCES positions(id),
+  exchange_id TEXT NOT NULL,
+  ts TEXT NOT NULL,
+  amount REAL NOT NULL,
+  rate REAL NOT NULL,
+  UNIQUE(position_id, exchange_id, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_funding_pay_pos ON funding_payments(position_id);

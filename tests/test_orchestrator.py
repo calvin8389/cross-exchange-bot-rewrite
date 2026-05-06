@@ -74,6 +74,8 @@ async def test_dry_run(symbol: str | None = None) -> None:
         private_key=os.environ.get("EDGEX_STARK_PRIVATE_KEY", "0x0"),
     )
 
+    adapters = {"lighter": lighter, "edgex": edgex}
+
     try:
         # --- IDLE → check flat ---
         print("\n[IDLE] Checking positions are flat...")
@@ -106,7 +108,7 @@ async def test_dry_run(symbol: str | None = None) -> None:
             min_net_apr_threshold=5.0,
             max_spread_pct=0.15,
         )
-        candidates = await scan_all(lighter, edgex, scan_config)
+        candidates = await scan_all(adapters, scan_config)
 
         if not candidates:
             print("  No candidates found with current thresholds")
@@ -114,67 +116,69 @@ async def test_dry_run(symbol: str | None = None) -> None:
 
         _ok("Scan", f"{len(candidates)} candidates")
         for i, c in enumerate(candidates[:5]):
-            print(f"  {i+1}. {c.symbol:6s}  net_apr={c.net_apr:7.2f}%  spread={c.spread:.4f}%  dir={c.direction}")
+            print(f"  {i+1}. {c.symbol:6s}  net_apr={c.net_apr:7.2f}%  spread={c.spread_pct:.4f}%  "
+                  f"pair={c.long_leg.exchange_id}/{c.short_leg.exchange_id}  dir={c.direction}")
 
         # --- OPENING → size calculation ---
         best = candidates[0]
-        print(f"\n[OPENING] Best candidate: {best.symbol}")
+        print(f"\n[OPENING] Best candidate: {best.symbol}  pair={best.long_leg.exchange_id}/{best.short_leg.exchange_id}")
+
+        # Resolve which adapter is long vs short
+        long_adapter = adapters[best.long_leg.exchange_id]
+        short_adapter = adapters[best.short_leg.exchange_id]
 
         # Market details
-        l_md = await lighter.get_market_details(best.symbol)
-        e_md = await edgex.get_market_details(best.symbol)
-        print(f"  Lighter market_id={l_md.market_id} tick={l_md.price_tick} step={l_md.size_step}")
-        print(f"  EdgeX   contract_id={e_md.market_id} tick={e_md.price_tick} step={e_md.size_step}")
+        long_md = await long_adapter.get_market_details(best.symbol)
+        short_md = await short_adapter.get_market_details(best.symbol)
+        print(f"  {best.long_leg.exchange_id} market_id={long_md.market_id} tick={long_md.price_tick} step={long_md.size_step}")
+        print(f"  {best.short_leg.exchange_id} market_id={short_md.market_id} tick={short_md.price_tick} step={short_md.size_step}")
 
         # Balance
-        l_bal = await lighter.get_balance()
+        long_bal = await long_adapter.get_balance()
         try:
-            e_bal = await edgex.get_balance()
+            short_bal = await short_adapter.get_balance()
         except Exception:
-            e_bal = type("_", (), {"available": l_bal.available})()
-        print(f"  Lighter available={l_bal.available:.2f}")
-        print(f"  EdgeX   available={e_bal.available:.2f}{' (fallback)' if e_bal is l_bal else ''}")
+            short_bal = type("_", (), {"available": long_bal.available})()
+        print(f"  {best.long_leg.exchange_id} available={long_bal.available:.2f}")
+        print(f"  {best.short_leg.exchange_id} available={short_bal.available:.2f}"
+              f"{' (fallback)' if short_bal is long_bal else ''}")
 
         # Size
-        mid = (best.lighter_bid + best.lighter_ask + best.edgex_bid + best.edgex_ask) / 4
+        mid = (best.long_leg.bid + best.long_leg.ask + best.short_leg.bid + best.short_leg.ask) / 4
         size_base = calculate_position_size(
-            e_bal.available, l_bal.available,
+            long_bal.available, short_bal.available,
             leverage=3, mid_price=mid, safety_factor=0.95,
         )
-        size_base = unify_size_step(size_base, e_md.size_step, l_md.size_step)
+        size_base = unify_size_step(size_base, long_md.size_step, short_md.size_step)
         notional = size_base * mid
         print(f"  Mid price={mid:.2f}")
         print(f"  Position size={size_base:.4f} {best.symbol}  notional={notional:.2f} USD (3x)")
 
-        # Direction & prices
-        if best.direction == "long_edgex_short_lighter":
-            edgex_side, lighter_side = "buy", "sell"
-        else:
-            edgex_side, lighter_side = "sell", "buy"
+        # Long = BUY, Short = SELL
+        long_side, short_side = "buy", "sell"
 
-        tick = max(l_md.price_tick, e_md.price_tick)
-        edgex_price = cross_price(edgex_side, best.edgex_bid, best.edgex_ask, tick, cross_pct=3.0)
-        lighter_price = cross_price(lighter_side, best.lighter_bid, best.lighter_ask, tick, cross_pct=3.0)
-        print(f"\n  EdgeX:   {edgex_side} {size_base} @ {edgex_price}")
-        print(f"  Lighter:  {lighter_side} {size_base} @ {lighter_price}")
+        tick = max(long_md.price_tick, short_md.price_tick)
+        long_price = cross_price("buy", best.long_leg.bid, best.long_leg.ask, tick, cross_pct=3.0)
+        short_price = cross_price("sell", best.short_leg.bid, best.short_leg.ask, tick, cross_pct=3.0)
+        print(f"\n  {best.long_leg.exchange_id} (long):  BUY  {size_base} @ {long_price}")
+        print(f"  {best.short_leg.exchange_id} (short): SELL {size_base} @ {short_price}")
 
         # EdgeX status
         if not e_ok:
             print(f"\n  ⚠ EdgeX private API unavailable — would fail on open_position()")
-            print(f"  → Lighter leg would be placed then rolled back")
 
         # --- HOLDING → PnL check ---
         print(f"\n[HOLDING] Would hold for ~8h, checking every 60s")
         print(f"  Stop-loss: enabled at {(100/3)*0.7:.0f}% of notional")
 
         # --- CLOSING ---
-        close_edgex_side = "sell" if edgex_side == "buy" else "buy"
-        close_lighter_side = "sell" if lighter_side == "buy" else "buy"
-        e_close_px = cross_price(close_edgex_side, best.edgex_bid, best.edgex_ask, tick, cross_pct=3.0)
-        l_close_px = cross_price(close_lighter_side, best.lighter_bid, best.lighter_ask, tick, cross_pct=3.0)
+        close_long_side = "sell"
+        close_short_side = "buy"
+        long_close_px = cross_price("sell", best.long_leg.bid, best.long_leg.ask, tick, cross_pct=3.0)
+        short_close_px = cross_price("buy", best.short_leg.bid, best.short_leg.ask, tick, cross_pct=3.0)
         print(f"\n[CLOSING] Would close:")
-        print(f"  EdgeX:   {close_edgex_side} {size_base} @ {e_close_px}")
-        print(f"  Lighter:  {close_lighter_side} {size_base} @ {l_close_px}")
+        print(f"  {best.long_leg.exchange_id}:   SELL {size_base} @ {long_close_px}")
+        print(f"  {best.short_leg.exchange_id}:  BUY  {size_base} @ {short_close_px}")
 
         # --- WAITING ---
         print(f"\n[WAITING] Cool-down 5 min → back to IDLE")

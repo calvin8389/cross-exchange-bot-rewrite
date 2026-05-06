@@ -1,5 +1,6 @@
 import asyncio
 import random
+import time
 from dataclasses import dataclass
 
 
@@ -18,3 +19,20 @@ class Backoff:
 
 async def sleep_backoff(backoff: Backoff, attempt: int) -> None:
     await asyncio.sleep(max(0.0, backoff.delay(attempt)))
+
+
+class RateLimiter:
+    """Token-bucket rate limiter for async API calls."""
+
+    def __init__(self, max_per_minute: int):
+        self._interval = 60.0 / max_per_minute
+        self._next_ok = 0.0
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        async with self._lock:
+            now = time.monotonic()
+            wait = self._next_ok - now
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._next_ok = time.monotonic() + self._interval

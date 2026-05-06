@@ -11,14 +11,27 @@ from typing import Optional
 
 @dataclass
 class Env:
-    edgex_base_url: str
-    edgex_account_id: int
-    edgex_stark_private_key: str
-    lighter_base_url: str
-    lighter_ws_url: str
-    lighter_private_key: str
-    account_index: int
-    api_key_index: int
+    # EdgeX
+    edgex_base_url: str = ""
+    edgex_account_id: int = 0
+    edgex_stark_private_key: str = ""
+    # Lighter
+    lighter_base_url: str = ""
+    lighter_ws_url: str = ""
+    lighter_private_key: str = ""
+    account_index: int = 0
+    api_key_index: int = 0
+    # Hyperliquid
+    hyperliquid_base_url: str = "https://api.hyperliquid.xyz"
+    hyperliquid_private_key: str = ""
+    hyperliquid_account_address: str = ""
+    # GRVT
+    grvt_trading_account_id: str = ""
+    grvt_private_key: str = ""
+    grvt_api_key: str = ""
+    grvt_env: str = "testnet"
+    # Exchange selection
+    active_exchanges: list[str] = field(default_factory=lambda: ["edgex", "lighter"])
 
 
 @dataclass
@@ -35,31 +48,50 @@ class BotConfig:
     max_spread_pct: float = 0.15
     cross_pct: float = 3.0
     enable_stop_loss: bool = True
+    # Multi-position support
+    max_concurrent_positions: int = 5
+    position_tiers: dict[str, float] = field(default_factory=lambda: {"large": 500.0, "medium": 200.0, "small": 100.0})
+    symbol_tiers: dict[str, str] = field(default_factory=dict)
 
 
 def load_env() -> Env:
-    """Load and validate environment variables.  Fail-fast on missing required keys."""
-    required = [
-        "EDGEX_BASE_URL",
-        "EDGEX_ACCOUNT_ID",
-        "EDGEX_STARK_PRIVATE_KEY",
-        "LIGHTER_BASE_URL",
-        "LIGHTER_WS_URL",
-        "LIGHTER_PRIVATE_KEY",
-    ]
-    missing = [k for k in required if not os.environ.get(k)]
-    if missing:
-        raise RuntimeError(f"Missing required env vars: {', '.join(missing)}")
+    """Load and validate environment variables. Fail-fast on missing required keys
+    for whichever exchanges are active."""
+    active_raw = os.environ.get("ACTIVE_EXCHANGES", "edgex,lighter")
+    active_exchanges = [e.strip() for e in active_raw.split(",") if e.strip()]
+
+    required_by_exchange: dict[str, list[str]] = {
+        "edgex": ["EDGEX_BASE_URL", "EDGEX_ACCOUNT_ID", "EDGEX_STARK_PRIVATE_KEY"],
+        "lighter": ["LIGHTER_BASE_URL", "LIGHTER_WS_URL", "LIGHTER_PRIVATE_KEY"],
+        "hyperliquid": ["HYPERLIQUID_PRIVATE_KEY", "HYPERLIQUID_ACCOUNT_ADDRESS"],
+        "grvt": ["GRVT_TRADING_ACCOUNT_ID", "GRVT_PRIVATE_KEY", "GRVT_API_KEY"],
+    }
+
+    for ex_id in active_exchanges:
+        keys = required_by_exchange.get(ex_id, [])
+        missing = [k for k in keys if not os.environ.get(k)]
+        if missing:
+            raise RuntimeError(
+                f"Exchange '{ex_id}' is active but missing required env vars: {', '.join(missing)}"
+            )
 
     return Env(
-        edgex_base_url=os.environ["EDGEX_BASE_URL"],
-        edgex_account_id=int(os.environ["EDGEX_ACCOUNT_ID"]),
-        edgex_stark_private_key=os.environ["EDGEX_STARK_PRIVATE_KEY"],
-        lighter_base_url=os.environ["LIGHTER_BASE_URL"],
-        lighter_ws_url=os.environ["LIGHTER_WS_URL"],
-        lighter_private_key=os.environ["LIGHTER_PRIVATE_KEY"],
+        edgex_base_url=os.environ.get("EDGEX_BASE_URL", ""),
+        edgex_account_id=int(os.environ.get("EDGEX_ACCOUNT_ID", "0")),
+        edgex_stark_private_key=os.environ.get("EDGEX_STARK_PRIVATE_KEY", ""),
+        lighter_base_url=os.environ.get("LIGHTER_BASE_URL", ""),
+        lighter_ws_url=os.environ.get("LIGHTER_WS_URL", ""),
+        lighter_private_key=os.environ.get("LIGHTER_PRIVATE_KEY", ""),
         account_index=int(os.environ.get("LIGHTER_ACCOUNT_INDEX", os.environ.get("ACCOUNT_INDEX", "0"))),
         api_key_index=int(os.environ.get("LIGHTER_API_KEY_INDEX", os.environ.get("API_KEY_INDEX", "0"))),
+        hyperliquid_base_url=os.environ.get("HYPERLIQUID_BASE_URL", "https://api.hyperliquid.xyz"),
+        hyperliquid_private_key=os.environ.get("HYPERLIQUID_PRIVATE_KEY", ""),
+        hyperliquid_account_address=os.environ.get("HYPERLIQUID_ACCOUNT_ADDRESS", ""),
+        grvt_trading_account_id=os.environ.get("GRVT_TRADING_ACCOUNT_ID", ""),
+        grvt_private_key=os.environ.get("GRVT_PRIVATE_KEY", ""),
+        grvt_api_key=os.environ.get("GRVT_API_KEY", ""),
+        grvt_env=os.environ.get("GRVT_ENVIRONMENT", os.environ.get("GRVT_ENV", "prod")),
+        active_exchanges=active_exchanges,
     )
 
 
@@ -82,4 +114,7 @@ def load_bot_config(path: str = "bot_config.json") -> BotConfig:
         max_spread_pct=raw.get("max_spread_pct", 0.15),
         cross_pct=raw.get("cross_pct", 3.0),
         enable_stop_loss=raw.get("enable_stop_loss", True),
+        max_concurrent_positions=raw.get("max_concurrent_positions", 5),
+        position_tiers=raw.get("position_tiers", {"large": 500.0, "medium": 200.0, "small": 100.0}),
+        symbol_tiers=raw.get("symbol_tiers", {}),
     )

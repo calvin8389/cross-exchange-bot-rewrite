@@ -1,7 +1,12 @@
 """State-machine orchestrator for the cross-exchange rotation bot.
 
-Ties together adapters, scanner, execution, and store into the main
-cycle loop: IDLE → ANALYZING → OPENING → HOLDING → CLOSING → WAITING.
+Supports multi-position parallel trading: each cycle picks the top N
+candidates (up to ``max_concurrent_positions``), opens them concurrently,
+and monitors each position's funding-rate spread.  When a pair's net APR
+drops below the threshold, that position is closed and a replacement is
+scanned.
+
+Position sizes are determined by per-symbol tiers (large / medium / small).
 """
 
 from __future__ import annotations
@@ -10,97 +15,124 @@ import asyncio
 import logging
 from typing import Optional
 
-from src.config import BotConfig, Env
+from src.config import BotConfig
 from src.core.execution import ExecConfig, close_position, open_position
 from src.core.models import BotState, Opportunity
 from src.core.scanner import ScanConfig, scan_all
 from src.db.store import Event, Store
-from src.exchanges.edgex_adapter import EdgeXAdapter
-from src.exchanges.lighter_adapter import LighterAdapter
+from src.exchanges.base import ExchangeAdapter
 
 logger = logging.getLogger(__name__)
 
 
 class Orchestrator:
-    def __init__(self, env: Env, bot_config: BotConfig, store: Store):
-        self.env = env
+    def __init__(
+        self,
+        adapters: dict[str, ExchangeAdapter],
+        bot_config: BotConfig,
+        store: Store,
+    ):
+        self.adapters = adapters
         self.bot_config = bot_config
         self.store = store
         self.state = BotState.IDLE
-
-        # Built on start()
-        self.lighter: Optional[LighterAdapter] = None
-        self.edgex: Optional[EdgeXAdapter] = None
         self._stop = asyncio.Event()
+        self._waiting_start: float = 0.0
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        self.lighter = LighterAdapter(
-            self.env.lighter_ws_url,
-            self.env.lighter_base_url,
-            self.env.account_index,
-        )
-        self.edgex = EdgeXAdapter(
-            self.env.edgex_base_url,
-            self.env.edgex_account_id,
-            self.env.edgex_stark_private_key,
-        )
         await self.store.kv_set("state", "IDLE")
 
     async def stop(self) -> None:
         self._stop.set()
-        if self.lighter:
-            await self.lighter.close()
-        if self.edgex:
-            await self.edgex.close()
+        for adapter in self.adapters.values():
+            try:
+                await adapter.close()
+            except Exception as e:
+                logger.warning("Error closing adapter %s: %s", adapter.exchange_id, e)
+
+    # ------------------------------------------------------------------
+    # Tier helpers
+    # ------------------------------------------------------------------
+
+    def _get_notional(self, symbol: str) -> float:
+        """Resolve position notional for a symbol from tier config."""
+        tiers = self.bot_config.symbol_tiers
+        amounts = self.bot_config.position_tiers
+        tier = tiers.get(symbol.upper(), "medium")
+        return amounts.get(tier, self.bot_config.notional_per_position)
 
     # ------------------------------------------------------------------
     # Recovery
     # ------------------------------------------------------------------
 
     async def recover(self) -> None:
-        """Check for active position on restart and resume if valid."""
-        row = await self.store.conn.execute("SELECT * FROM positions WHERE is_active=1")
-        pos = await row.fetchone()
-        if not pos:
-            logger.info("Recovery: no active position, starting fresh")
+        """Check for active positions on restart and resume if valid."""
+        rows = await self.store.conn.execute("SELECT * FROM positions WHERE is_active=1")
+        active = await rows.fetchall()
+        if not active:
+            logger.info("Recovery: no active positions, starting fresh")
             return
 
-        # Verify positions still exist on exchanges
-        try:
-            e_positions = await self.edgex.get_open_positions() if self.edgex else []
-            l_positions = await self.lighter.get_open_positions() if self.lighter else []
-        except Exception as e:
-            logger.error("Recovery: failed to fetch positions: %s", e)
-            self.state = BotState.ERROR
-            return
+        logger.info("Recovery: found %d active position(s)", len(active))
 
-        symbol = pos["symbol"]
-        e_match = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in e_positions)
-        l_match = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in l_positions)
+        all_ok = True
+        for pos in active:
+            exchange_long_id = pos["exchange_long"]
+            exchange_short_id = pos["exchange_short"]
+            symbol = pos["symbol"]
+            long_adapter = self.adapters.get(exchange_long_id)
+            short_adapter = self.adapters.get(exchange_short_id)
+            if not long_adapter or not short_adapter:
+                logger.error("Recovery: adapters missing for %s/%s - clearing position %d",
+                             exchange_long_id, exchange_short_id, pos["id"])
+                await self.store.conn.execute("UPDATE positions SET is_active=0 WHERE id=?", (pos["id"],))
+                await self.store.conn.commit()
+                all_ok = False
+                continue
 
-        if e_match and l_match:
-            logger.info("Recovery: found active hedge for %s, resuming HOLDING", symbol)
+            try:
+                long_positions = await long_adapter.get_open_positions()
+                short_positions = await short_adapter.get_open_positions()
+            except Exception as e:
+                logger.error("Recovery: fetch failed for %s: %s", symbol, e)
+                all_ok = False
+                continue
+
+            long_match = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in long_positions)
+            short_match = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in short_positions)
+
+            if not long_match and not short_match:
+                logger.warning("Recovery: %s flat on both exchanges - clearing", symbol)
+                await self.store.conn.execute("UPDATE positions SET is_active=0 WHERE id=?", (pos["id"],))
+                await self.store.conn.commit()
+                all_ok = False
+            elif long_match and short_match:
+                logger.info("Recovery: %s hedge verified (%s/%s)", symbol, exchange_long_id, exchange_short_id)
+            else:
+                logger.error("Recovery: %s UNHEDGED! %s=%s %s=%s",
+                             symbol, exchange_long_id, long_match, exchange_short_id, short_match)
+                await self.store.append_event(Event(
+                    level="error", event_type="RECOVERY_UNHEDGED",
+                    data={"symbol": symbol, "long_exchange": exchange_long_id,
+                          "short_exchange": exchange_short_id,
+                          "long_match": long_match, "short_match": short_match},
+                ))
+                all_ok = False
+
+        if all_ok and active:
             self.state = BotState.HOLDING
             await self.store.kv_set("state", "HOLDING")
-        elif not e_match and not l_match:
-            logger.warning("Recovery: DB had active position but exchanges are flat — clearing")
-            await self.store.conn.execute(
-                "UPDATE positions SET is_active=0 WHERE id=?", (pos["id"],)
-            )
-            await self.store.conn.commit()
-            self.state = BotState.IDLE
-        else:
-            logger.error("Recovery: unhedged position! One exchange has %s, the other doesn't", symbol)
-            self.state = BotState.ERROR
-            await self.store.kv_set("state", "ERROR")
-            await self.store.append_event(Event(
-                level="error", event_type="RECOVERY_UNHEDGED",
-                data={"symbol": symbol, "edgex_match": e_match, "lighter_match": l_match},
-            ))
+        elif not all_ok:
+            still_active = await self.store.conn.execute_fetchall("SELECT id FROM positions WHERE is_active=1")
+            if still_active:
+                self.state = BotState.HOLDING
+                await self.store.kv_set("state", "HOLDING")
+            else:
+                self.state = BotState.IDLE
 
     # ------------------------------------------------------------------
     # Main loop
@@ -141,17 +173,24 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     async def _do_idle(self) -> None:
-        logger.info("=== IDLE — starting new cycle ===")
-        # Ensure flat before starting
+        logger.info("=== IDLE - starting new cycle ===")
         try:
-            e_pos = await self.edgex.get_open_positions() if self.edgex else []
-            l_pos = await self.lighter.get_open_positions() if self.lighter else []
+            all_positions = await asyncio.gather(
+                *(adapter.get_open_positions() for adapter in self.adapters.values()),
+                return_exceptions=True,
+            )
         except Exception:
             await asyncio.sleep(5)
             return
 
-        if e_pos or l_pos:
-            logger.error("IDLE: found unexpected open positions — entering ERROR")
+        any_open = False
+        for positions in all_positions:
+            if isinstance(positions, list) and positions:
+                any_open = True
+                break
+
+        if any_open:
+            logger.error("IDLE: found unexpected open positions - entering ERROR")
             self.state = BotState.ERROR
             return
 
@@ -160,96 +199,319 @@ class Orchestrator:
 
     async def _do_analyzing(self) -> None:
         logger.info("=== ANALYZING ===")
+        threshold = self.bot_config.min_net_apr_threshold
         scan_config = ScanConfig(
             symbols=self.bot_config.symbols_to_monitor,
-            min_net_apr_threshold=self.bot_config.min_net_apr_threshold,
+            min_net_apr_threshold=threshold,
             max_spread_pct=self.bot_config.max_spread_pct,
             min_volume_usd=self.bot_config.min_volume_usd,
         )
 
-        candidates = await scan_all(self.lighter, self.edgex, scan_config)
+        candidates = await scan_all(self.adapters, scan_config)
         await self.store.append_event(Event(
             level="info", event_type="SCAN_RESULT",
-            data={"candidates": [{"symbol": o.symbol, "net_apr": o.net_apr, "spread": o.spread} for o in candidates[:5]]},
+            data={"candidates": [{"symbol": o.symbol, "net_apr": o.net_apr, "spread": o.spread_pct,
+                                  "pair": f"{o.long_leg.exchange_id}/{o.short_leg.exchange_id}"}
+                                 for o in candidates[:10]]},
         ))
 
         if not candidates:
-            logger.info("No candidates meet thresholds — waiting 60s")
+            logger.info("No candidates meet %.0f%% threshold - waiting 60s", threshold)
             await asyncio.sleep(60)
             return
 
-        self._next_opportunity = candidates[0]
-        logger.info("Best candidate: %s net_apr=%.2f%% spread=%.3f%%", candidates[0].symbol, candidates[0].net_apr, candidates[0].spread)
+        # Pick top N by net_apr, one per symbol
+        seen = set()
+        top: list[Opportunity] = []
+        for c in candidates:
+            if c.symbol.upper() in seen:
+                continue
+            seen.add(c.symbol.upper())
+            top.append(c)
+            if len(top) >= self.bot_config.max_concurrent_positions:
+                break
+
+        self._batch = top
+        symbols = [c.symbol for c in top]
+        notional_info = ", ".join(f"{c.symbol}=${self._get_notional(c.symbol):.0f}" for c in top)
+        logger.info("Selected %d positions: %s | notional: %s", len(top), symbols, notional_info)
         self.state = BotState.OPENING
         await self.store.kv_set("state", "OPENING")
 
     async def _do_opening(self) -> None:
-        logger.info("=== OPENING %s ===", self._next_opportunity.symbol)
-        exec_config = ExecConfig(
-            leverage=self.bot_config.leverage,
-            cross_pct=self.bot_config.cross_pct,
-        )
-        try:
-            await open_position(
-                self._next_opportunity, self.edgex, self.lighter, self.store, exec_config,
+        batch = self._batch
+        logger.info("=== OPENING %d positions ===", len(batch))
+
+        opened: list[tuple[str, str, str]] = []
+
+        async def _open_one(opp: Opportunity):
+            notional = self._get_notional(opp.symbol)
+            cfg = ExecConfig(
+                leverage=self.bot_config.leverage,
+                cross_pct=self.bot_config.cross_pct,
+                notional_override=notional,
             )
-        except Exception as e:
-            logger.error("Open failed: %s — returning to IDLE", e)
+            logger.info("  Opening %s ($%.0f) pair=%s/%s net_apr=%.2f%%",
+                        opp.symbol, notional, opp.long_leg.exchange_id,
+                        opp.short_leg.exchange_id, opp.net_apr)
+            try:
+                result = await open_position(opp, self.adapters, self.store, cfg)
+                opened.append((opp.symbol, opp.long_leg.exchange_id, opp.short_leg.exchange_id))
+                logger.info("  OK %s opened size=%.6f", opp.symbol,
+                            result.legs[opp.long_leg.exchange_id]["size"])
+            except Exception as e:
+                logger.error("  FAIL %s open: %s", opp.symbol, e)
+                raise
+
+        results = await asyncio.gather(*[_open_one(opp) for opp in batch], return_exceptions=True)
+        failures = [(batch[i], results[i]) for i in range(len(batch)) if isinstance(results[i], Exception)]
+
+        if failures:
+            logger.error("%d positions failed to open; rolling back all opened", len(failures))
+            for sym, _long_ex, _short_ex in opened:
+                logger.warning("  Rolling back %s", sym)
+                try:
+                    await close_position(self.adapters, self.store,
+                                         ExecConfig(cross_pct=self.bot_config.cross_pct))
+                except Exception as e2:
+                    logger.error("  Rollback %s failed: %s", sym, e2)
             self.state = BotState.IDLE
+            await self.store.kv_set("state", "IDLE")
             return
 
         self.state = BotState.HOLDING
-        self._holding_start = asyncio.get_running_loop().time()
+        logger.info("=== HOLDING %d position(s) ===", len(batch))
         await self.store.kv_set("state", "HOLDING")
 
+    # ------------------------------------------------------------------
+    # HOLDING: monitor net APR, close when spread collapses
+    # ------------------------------------------------------------------
+
     async def _do_holding(self) -> None:
-        elapsed = asyncio.get_running_loop().time() - self._holding_start
-        hold_seconds = self.bot_config.hold_duration_hours * 3600
+        threshold = self.bot_config.min_net_apr_threshold
 
-        # Update position PnL in DB
-        try:
-            e_pos = await self.edgex.get_open_positions() if self.edgex else []
-            l_pos = await self.lighter.get_open_positions() if self.lighter else []
-            from src.util.time import utc_now_iso
+        rows = await self.store.conn.execute("SELECT * FROM positions WHERE is_active=1")
+        active = await rows.fetchall()
 
-            e_pnl = sum(p.unrealized_pnl for p in e_pos)
-            l_pnl = sum(p.unrealized_pnl for p in l_pos)
-            await self.store.conn.execute(
-                "UPDATE positions SET edgex_unrealized_pnl=?, lighter_unrealized_pnl=?, updated_at=? WHERE is_active=1",
-                (e_pnl, l_pnl, utc_now_iso()),
+        if not active:
+            logger.info("HOLDING: no active positions - back to WAITING")
+            self.state = BotState.WAITING
+            self._waiting_start = asyncio.get_running_loop().time()
+            await self.store.kv_set("state", "WAITING")
+            return
+
+        from src.util.time import utc_now_iso
+
+        closed_ids: list[int] = []
+        still_open = 0
+
+        for pos in active:
+            pos_id = pos["id"]
+            symbol = pos["symbol"]
+            long_ex = pos["exchange_long"]
+            short_ex = pos["exchange_short"]
+
+            long_adapter = self.adapters.get(long_ex)
+            short_adapter = self.adapters.get(short_ex)
+
+            # Update PnL
+            if long_adapter and short_adapter:
+                try:
+                    long_positions = await long_adapter.get_open_positions()
+                    short_positions = await short_adapter.get_open_positions()
+                except Exception:
+                    long_positions = []
+                    short_positions = []
+
+                long_pnl = sum(p.unrealized_pnl for p in long_positions)
+                short_pnl = sum(p.unrealized_pnl for p in short_positions)
+
+                leg_rows = await self.store.conn.execute(
+                    "SELECT * FROM position_legs WHERE position_id=?", (pos_id,)
+                )
+                legs = await leg_rows.fetchall()
+                for leg in legs:
+                    if leg["exchange_id"] == long_ex:
+                        await self.store.conn.execute(
+                            "UPDATE position_legs SET unrealized_pnl=?, updated_at=? WHERE id=?",
+                            (long_pnl, utc_now_iso(), leg["id"]),
+                        )
+                    elif leg["exchange_id"] == short_ex:
+                        await self.store.conn.execute(
+                            "UPDATE position_legs SET unrealized_pnl=?, updated_at=? WHERE id=?",
+                            (short_pnl, utc_now_iso(), leg["id"]),
+                        )
+                await self.store.conn.commit()
+
+            # Re-check funding rate spread for this position
+            if not long_adapter or not short_adapter:
+                still_open += 1
+                continue
+
+            try:
+                long_md = await long_adapter.get_market_details(symbol)
+                short_md = await short_adapter.get_market_details(symbol)
+                long_fr, short_fr = await asyncio.gather(
+                    long_adapter.get_funding_rate(long_md.market_id),
+                    short_adapter.get_funding_rate(short_md.market_id),
+                )
+            except Exception as e:
+                logger.warning("HOLDING: re-fetch funding for %s failed: %s - keeping open", symbol, e)
+                still_open += 1
+                continue
+
+            if long_fr and short_fr:
+                current_net_apr = abs(long_fr.apr - short_fr.apr)
+                logger.info("HOLDING %s: net_apr=%.2f%% (long=%s %.2f%%, short=%s %.2f%%) threshold=%.0f%%",
+                            symbol, current_net_apr, long_ex, long_fr.apr, short_ex, short_fr.apr, threshold)
+
+                # Record funding rate snapshot
+                now_iso = utc_now_iso()
+                await self.store.conn.execute(
+                    "INSERT INTO funding_snapshots(position_id, exchange_id, rate, apr, recorded_at) VALUES(?,?,?,?,?)",
+                    (pos_id, long_ex, long_fr.rate, long_fr.apr, now_iso),
+                )
+                await self.store.conn.execute(
+                    "INSERT INTO funding_snapshots(position_id, exchange_id, rate, apr, recorded_at) VALUES(?,?,?,?,?)",
+                    (pos_id, short_ex, short_fr.rate, short_fr.apr, now_iso),
+                )
+                await self.store.conn.commit()
+
+                # Fetch actual settled funding payments for each leg
+                leg_rows2 = await self.store.conn.execute(
+                    "SELECT opened_at FROM position_legs WHERE position_id=? LIMIT 1", (pos_id,)
+                )
+                opened_row = await leg_rows2.fetchone()
+                since = opened_row["opened_at"] if opened_row else None
+
+                for adapter, ex_id in [(long_adapter, long_ex), (short_adapter, short_ex)]:
+                    try:
+                        payments = await adapter.get_funding_history(
+                            symbol=symbol, market_id=None,
+                            since_ts=since, until_ts=now_iso,
+                        )
+                        for p in payments:
+                            await self.store.conn.execute(
+                                "INSERT OR IGNORE INTO funding_payments(position_id, exchange_id, ts, amount, rate) VALUES(?,?,?,?,?)",
+                                (pos_id, ex_id, p.ts, p.amount, p.rate),
+                            )
+                    except Exception:
+                        pass  # funding history is best-effort
+                await self.store.conn.commit()
+
+                if current_net_apr < threshold:
+                    logger.info("  >> %s net_apr %.2f%% < %.0f%% - closing position %d",
+                                symbol, current_net_apr, threshold, pos_id)
+                    try:
+                        await close_position(self.adapters, self.store,
+                                             ExecConfig(cross_pct=self.bot_config.cross_pct),
+                                             position_id=pos_id)
+                        closed_ids.append(pos_id)
+                        await self.store.append_event(Event(
+                            level="info", event_type="CLOSE_APR_DROP", position_id=pos_id,
+                            data={"symbol": symbol, "net_apr": current_net_apr, "threshold": threshold},
+                        ))
+                    except Exception as e:
+                        logger.error("Close %s position %d failed: %s", symbol, pos_id, e)
+                        still_open += 1
+                else:
+                    still_open += 1
+            else:
+                logger.warning("HOLDING: %s funding rate missing - keeping open", symbol)
+                still_open += 1
+
+        # Re-scan for replacements if positions closed OR we have open slots
+        available_slots = self.bot_config.max_concurrent_positions - still_open
+        if closed_ids or available_slots > 0:
+            if closed_ids:
+                logger.info("Closed %d position(s); %d still open, %d slots available. Scanning...",
+                            len(closed_ids), still_open, available_slots)
+            else:
+                logger.info("%d/%d slots filled; %d empty — scanning for new positions...",
+                            still_open, self.bot_config.max_concurrent_positions, available_slots)
+            scan_config = ScanConfig(
+                symbols=self.bot_config.symbols_to_monitor,
+                min_net_apr_threshold=threshold,
+                max_spread_pct=self.bot_config.max_spread_pct,
+                min_volume_usd=self.bot_config.min_volume_usd,
             )
-            await self.store.conn.commit()
-            logger.info("HOLDING elapsed=%.1fh/%.1fh PnL edgex=%.2f lighter=%.2f",
-                        elapsed / 3600, hold_seconds / 3600, e_pnl, l_pnl)
+            candidates = await scan_all(self.adapters, scan_config)
 
-            # Stop-loss check
-            if self.bot_config.enable_stop_loss and self.bot_config.leverage > 0:
-                stop_loss_pct = (100 / self.bot_config.leverage) * 0.7
-                if e_pnl + l_pnl < -stop_loss_pct / 100 * self.bot_config.notional_per_position:
-                    logger.warning("Stop-loss triggered")
-                    self.state = BotState.CLOSING
-                    await self.store.kv_set("state", "CLOSING")
-                    return
-        except Exception as e:
-            logger.warning("HOLDING PnL update failed: %s", e)
+            # Filter out already-open symbols
+            rows2 = await self.store.conn.execute("SELECT * FROM positions WHERE is_active=1")
+            still_active = await rows2.fetchall()
+            open_symbols = {p["symbol"].upper() for p in still_active}
+            slots = self.bot_config.max_concurrent_positions - len(still_active)
 
-        if elapsed >= hold_seconds:
-            self.state = BotState.CLOSING
-            await self.store.kv_set("state", "CLOSING")
-        else:
-            await asyncio.sleep(self.bot_config.check_interval_seconds)
+            if slots <= 0:
+                logger.info("No slots available (%d/%d filled)", len(still_active), self.bot_config.max_concurrent_positions)
+
+            seen_sym = set()
+            new_positions: list[Opportunity] = []
+            for c in candidates:
+                sym = c.symbol.upper()
+                if sym in open_symbols or sym in seen_sym:
+                    continue
+                seen_sym.add(sym)
+                new_positions.append(c)
+                if len(new_positions) >= slots:
+                    break
+
+            if new_positions:
+                logger.info("Opening %d replacement(s)...", len(new_positions))
+
+                async def _open_one(opp):
+                    notional = self._get_notional(opp.symbol)
+                    cfg = ExecConfig(leverage=self.bot_config.leverage,
+                                     cross_pct=self.bot_config.cross_pct,
+                                     notional_override=notional)
+                    logger.info("  Opening %s ($%.0f) pair=%s/%s net_apr=%.2f%%",
+                                opp.symbol, notional, opp.long_leg.exchange_id,
+                                opp.short_leg.exchange_id, opp.net_apr)
+                    await open_position(opp, self.adapters, self.store, cfg)
+
+                await asyncio.gather(*[_open_one(opp) for opp in new_positions], return_exceptions=True)
+
+        # Check final state
+        rows3 = await self.store.conn.execute("SELECT id FROM positions WHERE is_active=1")
+        remaining = await rows3.fetchall()
+        logger.info("HOLDING: %d active position(s)", len(remaining))
+        if not remaining:
+            self.state = BotState.WAITING
+            self._waiting_start = asyncio.get_running_loop().time()
+            await self.store.kv_set("state", "WAITING")
+            return
+
+        await asyncio.sleep(self.bot_config.check_interval_seconds)
+
+    # ------------------------------------------------------------------
+    # CLOSING: emergency / manual — close everything
+    # ------------------------------------------------------------------
 
     async def _do_closing(self) -> None:
-        logger.info("=== CLOSING ===")
+        logger.info("=== CLOSING all active positions ===")
         exec_config = ExecConfig(cross_pct=self.bot_config.cross_pct)
-        try:
-            await close_position(self.edgex, self.lighter, self.store, exec_config)
-        except Exception as e:
-            logger.error("Close failed: %s", e)
+
+        rows = await self.store.conn.execute("SELECT * FROM positions WHERE is_active=1")
+        active = await rows.fetchall()
+        logger.info("Closing %d position(s)", len(active))
+
+        success_count = 0
+        for pos in active:
+            try:
+                await close_position(self.adapters, self.store, exec_config, position_id=pos["id"])
+                success_count += 1
+            except Exception as e:
+                logger.error("Close position %d failed: %s", pos["id"], e)
+
+        still_open = await self.store.conn.execute_fetchall("SELECT id FROM positions WHERE is_active=1")
+        if still_open:
+            logger.error("%d positions still open after closing attempts", len(still_open))
             self.state = BotState.ERROR
             await self.store.kv_set("state", "ERROR")
             return
 
+        logger.info("=== CLOSED %d/%d positions ===", success_count, len(active))
         self.state = BotState.WAITING
         self._waiting_start = asyncio.get_running_loop().time()
         await self.store.kv_set("state", "WAITING")
@@ -259,7 +521,7 @@ class Orchestrator:
         wait_seconds = self.bot_config.wait_between_cycles_minutes * 60
 
         if elapsed >= wait_seconds:
-            logger.info("=== WAITING done — back to IDLE ===")
+            logger.info("=== WAITING done - back to IDLE ===")
             self.state = BotState.IDLE
             await self.store.kv_set("state", "IDLE")
         else:
@@ -268,11 +530,10 @@ class Orchestrator:
             await asyncio.sleep(min(10, remaining))
 
     async def _do_error(self) -> None:
-        logger.error("=== ERROR — bot stopped, manual intervention required ===")
+        logger.error("=== ERROR - bot stopped, manual intervention required ===")
         await self.store.append_event(Event(
             level="error", event_type="ERROR_STATE",
             data={"message": "Bot in ERROR state, manual intervention required"},
         ))
-        # Stay in ERROR until restarted
         while not self._stop.is_set():
             await asyncio.sleep(30)
