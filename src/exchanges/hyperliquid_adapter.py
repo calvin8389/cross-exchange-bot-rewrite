@@ -174,22 +174,23 @@ class HyperliquidAdapter(ExchangeAdapter):
                 if entry["name"].upper() == coin:
                     sz_decimals = entry.get("szDecimals", 2)
                     size_step = float(10 ** -sz_decimals)
-                    # Derive price tick from impact price difference
+                    # Derive price tick from L2 snapshot level gaps
                     price_tick = 0.01
-                    if i < len(asset_ctxs):
-                        ctx = asset_ctxs[i]
-                        impact_pxs = ctx.get("impactPxs")
-                        if impact_pxs and len(impact_pxs) == 2:
-                            diff = abs(float(impact_pxs[1]) - float(impact_pxs[0]))
-                            if diff > 0:
-                                # Tick is the smallest price increment
-                                decimals = 0
-                                diff_str = f"{diff:.8f}".rstrip("0")
-                                if "." in diff_str:
-                                    decimals = len(diff_str.split(".")[1])
-                                    price_tick = float(10 ** -decimals)
-                                else:
-                                    price_tick = 1.0
+                    try:
+                        snapshot = info.l2_snapshot(coin)
+                        levels = snapshot.get("levels", [])
+                        if levels and len(levels) >= 2:
+                            bids = levels[0][:10]
+                            px_values = [float(b["px"]) for b in bids]
+                            min_diff = None
+                            for j in range(1, len(px_values)):
+                                diff = abs(px_values[j] - px_values[j - 1])
+                                if diff > 0 and (min_diff is None or diff < min_diff):
+                                    min_diff = diff
+                            if min_diff is not None:
+                                price_tick = min_diff
+                    except Exception:
+                        pass  # fall back to 0.01
                     return MarketDetails(
                         market_id=coin,
                         price_tick=price_tick,
