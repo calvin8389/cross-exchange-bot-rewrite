@@ -116,19 +116,21 @@ async def open_position(
     ))
 
     # ---- 3. Place orders concurrently ----------------------------------
-    long_order_id: Optional[str] = None
-    short_order_id: Optional[str] = None
+    from src.exchanges.base import OrderResult
+
+    long_result: Optional[OrderResult] = None
+    short_result: Optional[OrderResult] = None
 
     async def _place_long():
-        nonlocal long_order_id
-        long_order_id = await long_adapter.place_order(
+        nonlocal long_result
+        long_result = await long_adapter.place_order(
             symbol=opp.symbol, side=long_side, size_base=size_base,
             price=long_price, market_id=long_market_id,
         )
 
     async def _place_short():
-        nonlocal short_order_id
-        short_order_id = await short_adapter.place_order(
+        nonlocal short_result
+        short_result = await short_adapter.place_order(
             symbol=opp.symbol, side=short_side, size_base=size_base,
             price=short_price, market_id=short_market_id,
         )
@@ -165,7 +167,7 @@ async def open_position(
         raise RuntimeError(f"Both legs failed: long={long_err}, short={short_err}")
 
     # Treat None return (silent failure, no exception) as failure
-    if not long_order_id and not long_err:
+    if long_result is None and not long_err:
         logger.error("Long leg (%s) returned None, rolling back", opp.long_leg.exchange_id)
         await short_adapter.close_position(
             symbol=opp.symbol, side="buy", size_base=size_base, price=short_price,
@@ -180,7 +182,7 @@ async def open_position(
         await _fail_cycle(store, cycle_id, f"Long leg ({opp.long_leg.exchange_id}) returned None")
         raise RuntimeError(f"Long leg ({opp.long_leg.exchange_id}) returned None")
 
-    if not short_order_id and not short_err:
+    if short_result is None and not short_err:
         logger.error("Short leg (%s) returned None, rolling back", opp.short_leg.exchange_id)
         await long_adapter.close_position(
             symbol=opp.symbol, side="sell", size_base=size_base, price=long_price,
@@ -255,6 +257,23 @@ async def open_position(
         "long_size=?, short_size=?, long_entry_price=?, short_entry_price=?, "
         "updated_at=? WHERE id=?",
         (utc_now_iso(), size_base, size_base, long_fill_entry, short_fill_entry, utc_now_iso(), cycle_id),
+    )
+    await store.conn.commit()
+
+    # Insert OPEN order records into orders table
+    _legs = [
+        (cycle_id, position_id, opp.long_leg.exchange_id, opp.symbol, "OPEN", "buy",
+         long_result.order_id if long_result else None, long_price, long_fill_entry, size_base,
+         (long_fill_entry or long_price) * size_base, long_result.fee if long_result else 0.0, now_iso),
+        (cycle_id, position_id, opp.short_leg.exchange_id, opp.symbol, "OPEN", "sell",
+         short_result.order_id if short_result else None, short_price, short_fill_entry, size_base,
+         (short_fill_entry or short_price) * size_base, short_result.fee if short_result else 0.0, now_iso),
+    ]
+    await store.conn.executemany(
+        """INSERT INTO orders(cycle_id, position_id, exchange_id, symbol, action, side,
+           order_id, order_price, fill_price, size, notional, fee, created_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        _legs,
     )
     await store.conn.commit()
 
@@ -357,6 +376,7 @@ async def close_position(
             closed = True
             break
 
+        close_results: list[Optional[OrderResult]] = [None, None]  # [long, short]
         close_tasks = []
         if long_still_open:
             if attempt > 0:
@@ -377,7 +397,14 @@ async def close_position(
             )
 
         if close_tasks:
-            await asyncio.gather(*close_tasks, return_exceptions=True)
+            _results = await asyncio.gather(*close_tasks, return_exceptions=True)
+            # Capture results for orders table
+            _idx = 0
+            if long_still_open:
+                close_results[0] = _results[_idx] if not isinstance(_results[_idx], Exception) else None
+                _idx += 1
+            if short_still_open:
+                close_results[1] = _results[_idx] if not isinstance(_results[_idx], Exception) else None
 
         if await _confirm_flat(long_adapter, short_adapter, symbol, config):
             closed = True
@@ -395,7 +422,7 @@ async def close_position(
         ))
         raise RuntimeError("Close incomplete after 3 attempts - ESCALATE TO ERROR")
 
-    # ---- Record close prices & realized PnL ----------------------------
+    # ---- Record close prices, realized PnL, and CLOSE orders --------------
     long_entry = long_leg["entry_price"]
     short_entry = short_leg["entry_price"]
     long_size = long_leg["size"]
@@ -434,6 +461,28 @@ async def close_position(
         (utc_now_iso(), long_realized, short_realized, long_funding_pnl, short_funding_pnl, utc_now_iso(), cycle_id),
     )
     await store.conn.commit()
+
+    # Insert CLOSE order records
+    close_long_result, close_short_result = close_results[0], close_results[1]
+    close_now = utc_now_iso()
+    close_legs = [
+        (cycle_id, pos["id"], exchange_long_id, symbol, "CLOSE", close_long_side,
+         close_long_result.order_id if close_long_result else None, long_close_px, long_close_px,
+         long_leg["size"], long_close_px * long_leg["size"],
+         close_long_result.fee if close_long_result else 0.0, close_now),
+        (cycle_id, pos["id"], exchange_short_id, symbol, "CLOSE", close_short_side,
+         close_short_result.order_id if close_short_result else None, short_close_px, short_close_px,
+         short_leg["size"], short_close_px * short_leg["size"],
+         close_short_result.fee if close_short_result else 0.0, close_now),
+    ]
+    await store.conn.executemany(
+        """INSERT INTO orders(cycle_id, position_id, exchange_id, symbol, action, side,
+           order_id, order_price, fill_price, size, notional, fee, created_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        close_legs,
+    )
+    await store.conn.commit()
+
     await store.append_event(Event(
         level="info", event_type="CLOSING_DONE", cycle_id=cycle_id,
         data={"symbol": symbol, "long_realized": long_realized, "short_realized": short_realized,

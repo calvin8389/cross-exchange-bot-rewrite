@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from src.exchanges.base import Balance, BestBidAsk, ExchangeAdapter, FundingRate, MarketDetails, PositionInfo
+from src.exchanges.base import Balance, BestBidAsk, ExchangeAdapter, FundingRate, MarketDetails, OrderResult, PositionInfo
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +212,7 @@ class GrvtAdapter(ExchangeAdapter):
     async def place_order(
         self, symbol: str, side: str, size_base: float,
         price: float, market_id: int | str | None = None,
-    ) -> Optional[str]:
+    ) -> Optional[OrderResult]:
         contract = str(market_id) if market_id else symbol.upper()
 
         def _sync():
@@ -229,19 +229,24 @@ class GrvtAdapter(ExchangeAdapter):
             if not result:
                 logger.error("GRVT order returned None")
                 return None
-            # SDK returns {"result": {"order_id": "0x...", "state": {...}}}
+            # SDK returns {"result": {"order_id": "0x...", "state": {"avg_fill_price": [...]}}}
             inner = result.get("result", result)
             oid = inner.get("order_id", "")
-            logger.info("GRVT order placed: %s %s %s @ %s order_id=%s",
-                        contract, side, size_base, price, oid)
-            return str(oid) if oid else None
+            state = inner.get("state", {})
+            fill_price = None
+            avg_fills = state.get("avg_fill_price", [])
+            if avg_fills and avg_fills[0]:
+                fill_price = float(avg_fills[0])
+            logger.info("GRVT order placed: %s %s %s @ %s order_id=%s fill=%s",
+                        contract, side, size_base, price, oid, fill_price)
+            return OrderResult(order_id=str(oid), fill_price=fill_price) if oid else None
 
         return await asyncio.to_thread(_sync)
 
     async def close_position(
         self, symbol: str, side: str, size_base: float,
         price: float, market_id: int | str | None = None,
-    ) -> bool:
+    ) -> Optional[OrderResult]:
         contract = str(market_id) if market_id else symbol.upper()
 
         def _sync():
@@ -255,9 +260,17 @@ class GrvtAdapter(ExchangeAdapter):
             )
             if not result:
                 logger.error("GRVT close order returned None")
-                return False
-            logger.info("GRVT close order placed: %s %s %s", contract, side, size_base)
-            return True
+                return None
+            inner = result.get("result", result)
+            oid = inner.get("order_id", "")
+            state = inner.get("state", {})
+            fill_price = None
+            avg_fills = state.get("avg_fill_price", [])
+            if avg_fills and avg_fills[0]:
+                fill_price = float(avg_fills[0])
+            logger.info("GRVT close order placed: %s %s %s order_id=%s fill=%s",
+                        contract, side, size_base, oid, fill_price)
+            return OrderResult(order_id=str(oid), fill_price=fill_price) if oid else OrderResult(order_id=None)
 
         return await asyncio.to_thread(_sync)
 

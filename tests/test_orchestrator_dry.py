@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.core.orchestrator import BotState, Orchestrator
 from src.core.models import ExchangeLeg, Opportunity
+from src.exchanges.base import OrderResult
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -103,15 +104,15 @@ class TestOpeningClosing:
                       get_market_details=AsyncMock(return_value=_fake_market_details("BTC", "lighter", use_fixture=True)),
                       get_best_bid_ask=AsyncMock(return_value=MagicMock(bid=80000.0, ask=80001.0)),
                       get_open_positions=AsyncMock(return_value=[MagicMock(symbol="BTC", size=0.001, entry_price=80000.0, unrealized_pnl=0.0)]),
-                      place_order=AsyncMock(return_value="order_ok"),
-                      close_position=AsyncMock(return_value=True))
+                      place_order=AsyncMock(return_value=OrderResult(order_id="order_ok")),
+                      close_position=AsyncMock(return_value=OrderResult(order_id="close_ok")))
         b = MagicMock(exchange_id="grvt",
                       get_balance=AsyncMock(return_value=MagicMock(total_equity=1000, available=1000)),
                       get_market_details=AsyncMock(return_value=_fake_market_details("BTC", "grvt", use_fixture=True)),
                       get_best_bid_ask=AsyncMock(return_value=MagicMock(bid=80000.0, ask=80001.0)),
                       get_open_positions=AsyncMock(return_value=[MagicMock(symbol="BTC", size=-0.001, entry_price=80000.0, unrealized_pnl=0.0)]),
-                      place_order=AsyncMock(return_value="order_ok"),
-                      close_position=AsyncMock(return_value=True))
+                      place_order=AsyncMock(return_value=OrderResult(order_id="order_ok")),
+                      close_position=AsyncMock(return_value=OrderResult(order_id="close_ok")))
 
         from src.core.orchestrator import Orchestrator
         orch = Orchestrator(adapters={"lighter": a, "grvt": b}, bot_config=_make_config(), store=store)
@@ -161,12 +162,12 @@ class TestOpeningClosing:
                       get_market_details=AsyncMock(return_value=_fake_market_details("BTC", "lighter", use_fixture=True)),
                       get_best_bid_ask=AsyncMock(return_value=MagicMock(bid=80000.0, ask=80001.0)),
                       get_open_positions=AsyncMock(side_effect=[[FakePos()], *([[]] * 20)]),
-                      close_position=AsyncMock(return_value=True))
+                      close_position=AsyncMock(return_value=OrderResult(order_id="close_ok")))
         b = MagicMock(exchange_id="grvt",
                       get_market_details=AsyncMock(return_value=_fake_market_details("BTC", "grvt", use_fixture=True)),
                       get_best_bid_ask=AsyncMock(return_value=MagicMock(bid=80000.0, ask=80001.0)),
                       get_open_positions=AsyncMock(side_effect=[[FakePos()], *([[]] * 20)]),
-                      close_position=AsyncMock(return_value=True))
+                      close_position=AsyncMock(return_value=OrderResult(order_id="close_ok")))
 
         orch = Orchestrator(adapters={"lighter": a, "grvt": b}, bot_config=_make_config(), store=store)
         orch.state = BotState.CLOSING

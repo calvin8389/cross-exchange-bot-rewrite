@@ -47,6 +47,14 @@ class MarketDetails:
     size_step: float
 
 
+@dataclass
+class OrderResult:
+    """Result returned by place_order / close_position."""
+    order_id: Optional[str]
+    fill_price: Optional[float] = None
+    fee: Optional[float] = None
+
+
 class ExchangeAdapter(ABC):
     @property
     @abstractmethod
@@ -71,13 +79,13 @@ class ExchangeAdapter(ABC):
     async def place_order(
         self, symbol: str, side: str, size_base: float,
         price: float, market_id: int | str | None = None,
-    ) -> Optional[str]: ...
+    ) -> Optional[OrderResult]: ...
 
     @abstractmethod
     async def close_position(
         self, symbol: str, side: str, size_base: float,
         price: float, market_id: int | str | None = None,
-    ) -> bool: ...
+    ) -> Optional[OrderResult]: ...
 
     @abstractmethod
     async def close(self) -> None: ...

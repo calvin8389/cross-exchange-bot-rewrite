@@ -95,3 +95,22 @@ CREATE TABLE IF NOT EXISTS funding_payments (
   UNIQUE(position_id, exchange_id, ts)
 );
 CREATE INDEX IF NOT EXISTS idx_funding_pay_pos ON funding_payments(position_id);
+
+-- Complete order audit trail: one row per exchange order (OPEN or CLOSE leg)
+CREATE TABLE IF NOT EXISTS orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  cycle_id INTEGER NOT NULL REFERENCES cycles(id),
+  position_id INTEGER REFERENCES positions(id),
+  exchange_id TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  action TEXT NOT NULL,          -- 'OPEN' or 'CLOSE'
+  side TEXT NOT NULL,            -- 'buy' or 'sell'
+  order_id TEXT,                 -- exchange-assigned order ID
+  order_price REAL NOT NULL,     -- limit price submitted
+  fill_price REAL,               -- actual fill price (from exchange)
+  size REAL NOT NULL,
+  notional REAL,                 -- fill_price * size
+  fee REAL DEFAULT 0.0,          -- trading fee in quote currency
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_orders_cycle ON orders(cycle_id);

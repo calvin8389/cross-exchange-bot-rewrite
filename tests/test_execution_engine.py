@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.core.execution import ExecConfig
 from src.core.models import ExchangeLeg, Opportunity
+from src.exchanges.base import OrderResult
 
 
 @pytest_asyncio.fixture
@@ -54,8 +55,8 @@ def _mock_adapter(name: str):
     a.get_market_details = AsyncMock(return_value=FakeMarket(f"{name}_BTC", 0.1, 0.001))
     a.get_best_bid_ask = AsyncMock(return_value=FakeBBA())
     a.get_open_positions = AsyncMock(return_value=[])
-    a.place_order = AsyncMock(return_value="order_123")
-    a.close_position = AsyncMock(return_value=True)
+    a.place_order = AsyncMock(return_value=OrderResult(order_id="order_123"))
+    a.close_position = AsyncMock(return_value=OrderResult(order_id="close_456"))
     return a
 
 

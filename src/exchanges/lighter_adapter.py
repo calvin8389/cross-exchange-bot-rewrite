@@ -7,7 +7,7 @@ from typing import Optional
 
 import aiohttp
 
-from src.exchanges.base import Balance, BestBidAsk, ExchangeAdapter, FundingRate, MarketDetails, PositionInfo
+from src.exchanges.base import Balance, BestBidAsk, ExchangeAdapter, FundingRate, MarketDetails, OrderResult, PositionInfo
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +223,7 @@ class LighterAdapter(ExchangeAdapter):
     async def place_order(
         self, symbol: str, side: str, size_base: float,
         price: float, market_id: int | str | None = None,
-    ) -> Optional[str]:
+    ) -> Optional[OrderResult]:
         import lighter
 
         base_url = self.rest_url
@@ -258,7 +258,7 @@ class LighterAdapter(ExchangeAdapter):
                 logger.error("Lighter order error: %s", err)
                 return None
             logger.info("Lighter order placed: %s %s %s @ %s", symbol, side, size_base, price)
-            return str(client_order_id)
+            return OrderResult(order_id=str(client_order_id))
         finally:
             await signer.close()
 
@@ -335,7 +335,7 @@ class LighterAdapter(ExchangeAdapter):
     async def close_position(
         self, symbol: str, side: str, size_base: float,
         price: float, market_id: int | str | None = None,
-    ) -> bool:
+    ) -> Optional[OrderResult]:
         import lighter
 
         base_url = self.rest_url
@@ -368,9 +368,9 @@ class LighterAdapter(ExchangeAdapter):
             )
             if err:
                 logger.error("Lighter close error: %s", err)
-                return False
+                return None
             logger.info("Lighter close order placed: %s %s %s @ %s", symbol, side, size_base, price)
-            return True
+            return OrderResult(order_id=str(client_order_id))
         finally:
             await signer.close()
 

@@ -57,7 +57,7 @@ async def test_lighter(symbol: str, notional: float):
         if not oid:
             _fail("open", "order returned None")
             return
-        _ok("open", f"BUY {size:.4f} @ {bba.ask:.4f} order_id={oid}")
+        _ok("open", f"BUY {size:.4f} @ {bba.ask:.4f} order_id={oid.order_id}")
 
         # 2. Confirm position
         await asyncio.sleep(3)
@@ -204,7 +204,7 @@ async def test_edgex(symbol: str, notional: float):
         if not oid:
             _fail("open", "order returned None")
             return
-        _ok("open", f"BUY {size:.4f} @ {bba.ask:.4f} order_id={oid}")
+        _ok("open", f"BUY {size:.4f} @ {bba.ask:.4f} order_id={oid.order_id}")
 
         # 2. Confirm
         await asyncio.sleep(5)
@@ -270,7 +270,7 @@ async def test_grvt(symbol: str, notional: float):
         if not oid:
             _fail("open", "order returned None")
             return
-        _ok("open", f"BUY {size:.4f} @ {bba.ask:.4f} order_id={oid}")
+        _ok("open", f"BUY {size:.4f} @ {bba.ask:.4f} order_id={oid.order_id}")
 
         # 2. Confirm
         await asyncio.sleep(3)
@@ -291,7 +291,7 @@ async def test_grvt(symbol: str, notional: float):
         close_size = abs(match[0].size)
         bba2 = await a.get_best_bid_ask(md.market_id)
         ok = await a.close_position(symbol, close_side, close_size, bba2.bid, md.market_id)
-        _ok("close" if ok else "close", f"{close_side.upper()} {close_size:.4f} @ {bba2.bid:.4f} -- {'OK' if ok else 'FAIL'}")
+        _ok("close" if ok else "close", f"{close_side.upper()} {close_size:.4f} @ {bba2.bid:.4f} -- {'OK' if ok else 'FAIL'} order_id={ok.order_id if ok else 'N/A'}")
 
         # 4. Verify flat
         await asyncio.sleep(3)
