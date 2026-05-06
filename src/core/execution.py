@@ -15,7 +15,7 @@ from typing import Optional
 from src.core.models import Opportunity, PositionState
 from src.core.sizing import calculate_position_size, cross_price, unify_size_step
 from src.db.store import Event, Store
-from src.exchanges.base import ExchangeAdapter
+from src.exchanges.base import ExchangeAdapter, OrderResult
 
 logger = logging.getLogger(__name__)
 
@@ -118,19 +118,19 @@ async def open_position(
     ))
 
     # ---- 3. Place orders concurrently ----------------------------------
-    long_order_id: Optional[str] = None
-    short_order_id: Optional[str] = None
+    long_order_result: Optional[OrderResult] = None
+    short_order_result: Optional[OrderResult] = None
 
     async def _place_long():
-        nonlocal long_order_id
-        long_order_id = await long_adapter.place_order(
+        nonlocal long_order_result
+        long_order_result = await long_adapter.place_order(
             symbol=opp.symbol, side=long_side, size_base=size_base,
             price=long_price, market_id=long_market_id,
         )
 
     async def _place_short():
-        nonlocal short_order_id
-        short_order_id = await short_adapter.place_order(
+        nonlocal short_order_result
+        short_order_result = await short_adapter.place_order(
             symbol=opp.symbol, side=short_side, size_base=size_base,
             price=short_price, market_id=short_market_id,
         )
@@ -193,7 +193,7 @@ async def open_position(
     pos_row = await store.conn.execute("SELECT last_insert_rowid()")
     position_id = (await pos_row.fetchone())[0]
 
-    # Insert leg records
+    # Insert leg records (entry_price may be updated below with actual fill)
     await store.conn.execute(
         """INSERT INTO position_legs(position_id, exchange_id, side, size, entry_price, market_id, opened_at, updated_at)
            VALUES(?,?,?,?,?,?,?,?)""",
@@ -208,11 +208,76 @@ async def open_position(
     )
     await store.conn.commit()
 
+    # ---- 7. Fetch actual fill prices and record orders -----------------
+    # Query the exchange for the live position to get the real average entry price.
+    long_fill = long_price
+    short_fill = short_price
+    try:
+        actual_longs, actual_shorts = await asyncio.gather(
+            long_adapter.get_open_positions(),
+            short_adapter.get_open_positions(),
+        )
+        long_fill = next(
+            (p.entry_price for p in actual_longs
+             if p.symbol.upper() == opp.symbol.upper() and abs(p.size) > 1e-8),
+            long_price,
+        )
+        short_fill = next(
+            (p.entry_price for p in actual_shorts
+             if p.symbol.upper() == opp.symbol.upper() and abs(p.size) > 1e-8),
+            short_price,
+        )
+    except Exception as e:
+        logger.warning("Could not fetch actual fill prices for %s: %s — using order price", opp.symbol, e)
+
+    # Fetch leg IDs so we can link orders → legs
+    leg_cur = await store.conn.execute(
+        "SELECT id, exchange_id FROM position_legs WHERE position_id=?", (position_id,)
+    )
+    leg_id_by_exchange = {r["exchange_id"]: r["id"] for r in await leg_cur.fetchall()}
+    now_ts = utc_now_iso()
+
+    # Insert OPEN order records — the source-of-truth for PnL
+    await store.conn.execute(
+        """INSERT INTO orders(cycle_id, position_id, leg_id, exchange_id, symbol,
+           action, side, order_id, order_price, fill_price, size, notional,
+           signal_apr, funding_rate, created_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (cycle_id, position_id, leg_id_by_exchange.get(opp.long_leg.exchange_id),
+         opp.long_leg.exchange_id, opp.symbol,
+         "OPEN", "buy",
+         long_order_result.order_id if long_order_result else None,
+         long_price, long_fill, size_base, long_fill * size_base,
+         opp.net_apr, opp.long_leg.rate, now_ts),
+    )
+    await store.conn.execute(
+        """INSERT INTO orders(cycle_id, position_id, leg_id, exchange_id, symbol,
+           action, side, order_id, order_price, fill_price, size, notional,
+           signal_apr, funding_rate, created_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (cycle_id, position_id, leg_id_by_exchange.get(opp.short_leg.exchange_id),
+         opp.short_leg.exchange_id, opp.symbol,
+         "OPEN", "sell",
+         short_order_result.order_id if short_order_result else None,
+         short_price, short_fill, size_base, short_fill * size_base,
+         opp.net_apr, opp.short_leg.rate, now_ts),
+    )
+
+    # Update leg entry prices and cycle entry prices with actual fills
+    await store.conn.execute(
+        "UPDATE position_legs SET entry_price=?, updated_at=? WHERE position_id=? AND exchange_id=?",
+        (long_fill, now_ts, position_id, opp.long_leg.exchange_id),
+    )
+    await store.conn.execute(
+        "UPDATE position_legs SET entry_price=?, updated_at=? WHERE position_id=? AND exchange_id=?",
+        (short_fill, now_ts, position_id, opp.short_leg.exchange_id),
+    )
+
     await store.conn.execute(
         "UPDATE cycles SET state='HOLDING', opened_at=?, "
         "long_size=?, short_size=?, long_entry_price=?, short_entry_price=?, "
         "updated_at=? WHERE id=?",
-        (utc_now_iso(), size_base, size_base, long_price, short_price, utc_now_iso(), cycle_id),
+        (now_ts, size_base, size_base, long_fill, short_fill, now_ts, cycle_id),
     )
     await store.conn.commit()
 
@@ -299,6 +364,8 @@ async def close_position(
     ))
 
     closed = False
+    final_long_close_result: Optional[OrderResult] = None
+    final_short_close_result: Optional[OrderResult] = None
     for attempt in range(3):  # up to 2 retries
         if attempt > 0:
             wider_pct = config.cross_pct * (1.0 + attempt * 0.5)
@@ -306,7 +373,7 @@ async def close_position(
             long_close_px = cross_price("sell", long_bba.bid, long_bba.ask, tick=0.01, cross_pct=wider_pct)
             short_close_px = cross_price("buy", short_bba.bid, short_bba.ask, tick=0.01, cross_pct=wider_pct)
 
-        await asyncio.gather(
+        close_results = await asyncio.gather(
             long_adapter.close_position(symbol=symbol, side=close_long_side,
                                         size_base=long_leg["size"], price=long_close_px),
             short_adapter.close_position(symbol=symbol, side=close_short_side,
@@ -317,6 +384,8 @@ async def close_position(
 
         if await _confirm_flat(long_adapter, short_adapter, symbol, config):
             closed = True
+            final_long_close_result = close_results[0] if not isinstance(close_results[0], Exception) else None
+            final_short_close_result = close_results[1] if not isinstance(close_results[1], Exception) else None
             break
 
     if not closed:
@@ -331,16 +400,61 @@ async def close_position(
         ))
         raise RuntimeError("Close incomplete after 3 attempts - ESCALATE TO ERROR")
 
-    # ---- Record close prices & realized PnL ----------------------------
+    # ---- Record close orders and realized PnL -------------------------
     long_entry = long_leg["entry_price"]
     short_entry = short_leg["entry_price"]
     long_size = long_leg["size"]
     short_size = short_leg["size"]
 
+    # Insert CLOSE order records — these are the fill prices we submitted
+    # (actual fill price equals submitted price for cross-spread limit orders)
+    now_ts_close = utc_now_iso()
+    leg_ids_cur = await store.conn.execute(
+        "SELECT id, exchange_id FROM position_legs WHERE position_id=?", (pos["id"],)
+    )
+    close_leg_ids = {r["exchange_id"]: r["id"] for r in await leg_ids_cur.fetchall()}
+
+    await store.conn.execute(
+        """INSERT INTO orders(cycle_id, position_id, leg_id, exchange_id, symbol,
+           action, side, order_id, order_price, fill_price, size, notional, created_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (cycle_id, pos["id"], close_leg_ids.get(exchange_long_id),
+         exchange_long_id, symbol,
+         "CLOSE", "sell",
+         final_long_close_result.order_id if final_long_close_result else None,
+         long_close_px, long_close_px, long_size, long_close_px * long_size,
+         now_ts_close),
+    )
+    await store.conn.execute(
+        """INSERT INTO orders(cycle_id, position_id, leg_id, exchange_id, symbol,
+           action, side, order_id, order_price, fill_price, size, notional, created_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (cycle_id, pos["id"], close_leg_ids.get(exchange_short_id),
+         exchange_short_id, symbol,
+         "CLOSE", "buy",
+         final_short_close_result.order_id if final_short_close_result else None,
+         short_close_px, short_close_px, short_size, short_close_px * short_size,
+         now_ts_close),
+    )
+    await store.conn.commit()
+
+    # Compute realized PnL from the orders table (actual open fill prices).
+    # Fall back to position_legs.entry_price if OPEN orders aren't present.
+    open_orders_cur = await store.conn.execute(
+        "SELECT exchange_id, fill_price, order_price FROM orders WHERE cycle_id=? AND action='OPEN'",
+        (cycle_id,),
+    )
+    open_fills = {
+        r["exchange_id"]: (r["fill_price"] or r["order_price"])
+        for r in await open_orders_cur.fetchall()
+    }
+    long_open_fill = open_fills.get(exchange_long_id, long_entry)
+    short_open_fill = open_fills.get(exchange_short_id, short_entry)
+
     # Long leg: opened BUY → closed SELL: PnL = (close - entry) * size
-    long_realized = (long_close_px - long_entry) * long_size
+    long_realized = (long_close_px - long_open_fill) * long_size
     # Short leg: opened SELL → closed BUY: PnL = (entry - close) * size
-    short_realized = (short_entry - short_close_px) * short_size
+    short_realized = (short_open_fill - short_close_px) * short_size
 
     # Update leg records with close prices
     for leg in [long_leg, short_leg]:

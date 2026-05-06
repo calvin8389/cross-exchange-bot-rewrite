@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from src.exchanges.base import Balance, BestBidAsk, ExchangeAdapter, FundingRate, MarketDetails, PositionInfo
+from src.exchanges.base import Balance, BestBidAsk, ExchangeAdapter, FundingRate, MarketDetails, OrderResult, PositionInfo
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +212,7 @@ class GrvtAdapter(ExchangeAdapter):
     async def place_order(
         self, symbol: str, side: str, size_base: float,
         price: float, market_id: int | str | None = None,
-    ) -> Optional[str]:
+    ) -> Optional[OrderResult]:
         contract = str(market_id) if market_id else symbol.upper()
 
         def _sync():
@@ -232,14 +232,14 @@ class GrvtAdapter(ExchangeAdapter):
                 return None
             oid = result.get("id") or result.get("order_id", "")
             logger.info("GRVT order placed: %s %s %s @ %s", contract, side, size_base, price)
-            return str(oid) if oid else None
+            return OrderResult(order_id=str(oid) if oid else None)
 
         return await asyncio.to_thread(_sync)
 
     async def close_position(
         self, symbol: str, side: str, size_base: float,
         price: float, market_id: int | str | None = None,
-    ) -> bool:
+    ) -> Optional[OrderResult]:
         contract = str(market_id) if market_id else symbol.upper()
 
         def _sync():
@@ -253,9 +253,10 @@ class GrvtAdapter(ExchangeAdapter):
             )
             if not result:
                 logger.error("GRVT close order returned None")
-                return False
+                return None
+            oid = result.get("id") or result.get("order_id", "")
             logger.info("GRVT close order placed: %s %s %s", contract, side, size_base)
-            return True
+            return OrderResult(order_id=str(oid) if oid else None)
 
         return await asyncio.to_thread(_sync)
 

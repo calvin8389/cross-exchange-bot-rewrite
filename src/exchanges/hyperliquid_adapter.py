@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from src.exchanges.base import Balance, BestBidAsk, ExchangeAdapter, FundingRate, MarketDetails, PositionInfo
+from src.exchanges.base import Balance, BestBidAsk, ExchangeAdapter, FundingRate, MarketDetails, OrderResult, PositionInfo
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +187,7 @@ class HyperliquidAdapter(ExchangeAdapter):
     async def place_order(
         self, symbol: str, side: str, size_base: float,
         price: float, market_id: int | str | None = None,
-    ) -> Optional[str]:
+    ) -> Optional[OrderResult]:
         from hyperliquid.utils.signing import OrderType
 
         coin = str(market_id) if market_id else symbol.upper()
@@ -206,28 +206,29 @@ class HyperliquidAdapter(ExchangeAdapter):
             if isinstance(result, dict) and result.get("status") == "err":
                 logger.error("Hyperliquid order error: %s", result)
                 return None
-            if not isinstance(result, dict):
-                return str(result) if result else None
-            # Top-level oid (rare but possible)
-            for key in ("oid", "orderId"):
-                if key in result:
-                    return str(result[key])
-            # Standard response: {"response": {"data": {"statuses": [{"resting"/"filled": {"oid": ...}}]}}}
-            statuses = result.get("response", {}).get("data", {}).get("statuses", [])
-            if statuses:
-                for event in ("filled", "resting"):
-                    oid = statuses[0].get(event, {}).get("oid")
-                    if oid:
-                        return str(oid)
-            logger.warning("Hyperliquid order response missing oid: %s", result)
-            return None
+            oid = None
+            if isinstance(result, dict):
+                for key in ("oid", "orderId"):
+                    if key in result:
+                        oid = str(result[key])
+                        break
+                statuses = result.get("response", {}).get("data", {}).get("statuses", [])
+                if statuses and oid is None:
+                    for event in ("filled", "resting"):
+                        oid_val = statuses[0].get(event, {}).get("oid")
+                        if oid_val:
+                            oid = str(oid_val)
+                            break
+            if oid is None:
+                logger.warning("Hyperliquid order response missing oid: %s", result)
+            return OrderResult(order_id=oid)
 
         return await asyncio.to_thread(_sync)
 
     async def close_position(
         self, symbol: str, side: str, size_base: float,
         price: float, market_id: int | str | None = None,
-    ) -> bool:
+    ) -> Optional[OrderResult]:
         from hyperliquid.utils.signing import OrderType
 
         coin = str(market_id) if market_id else symbol.upper()
@@ -245,8 +246,17 @@ class HyperliquidAdapter(ExchangeAdapter):
             )
             if isinstance(result, dict) and result.get("status") == "err":
                 logger.error("Hyperliquid close error: %s", result)
-                return False
-            return True
+                return None
+            oid = None
+            if isinstance(result, dict):
+                statuses = result.get("response", {}).get("data", {}).get("statuses", [])
+                if statuses:
+                    for event in ("filled", "resting"):
+                        oid_val = statuses[0].get(event, {}).get("oid")
+                        if oid_val:
+                            oid = str(oid_val)
+                            break
+            return OrderResult(order_id=oid)
 
         return await asyncio.to_thread(_sync)
 

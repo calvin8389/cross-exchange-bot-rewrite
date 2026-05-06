@@ -95,3 +95,27 @@ CREATE TABLE IF NOT EXISTS funding_payments (
   UNIQUE(position_id, exchange_id, ts)
 );
 CREATE INDEX IF NOT EXISTS idx_funding_pay_pos ON funding_payments(position_id);
+
+-- Full order log: one row per exchange order (OPEN or CLOSE leg).
+-- This is the authoritative source for PnL calculation.
+CREATE TABLE IF NOT EXISTS orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  cycle_id INTEGER NOT NULL REFERENCES cycles(id),
+  position_id INTEGER REFERENCES positions(id),
+  leg_id INTEGER REFERENCES position_legs(id),
+  exchange_id TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  action TEXT NOT NULL,          -- 'OPEN' or 'CLOSE'
+  side TEXT NOT NULL,            -- 'buy' or 'sell'
+  order_id TEXT,                 -- exchange-assigned order ID
+  order_price REAL NOT NULL,     -- submitted price (cross_price estimate)
+  fill_price REAL,               -- actual average fill price (updated after confirmation)
+  size REAL NOT NULL,            -- base quantity
+  notional REAL,                 -- fill_price * size (updated after confirmation)
+  fee REAL,                      -- trading fee in USD (NULL if not reported by exchange)
+  signal_apr REAL,               -- net APR spread that triggered this trade (OPEN only)
+  funding_rate REAL,             -- per-leg funding rate at time of trade (OPEN only)
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_orders_cycle ON orders(cycle_id);
+CREATE INDEX IF NOT EXISTS idx_orders_position ON orders(position_id);

@@ -5,7 +5,7 @@ from typing import Optional
 
 import aiohttp
 
-from src.exchanges.base import Balance, BestBidAsk, ExchangeAdapter, FundingRate, MarketDetails, PositionInfo
+from src.exchanges.base import Balance, BestBidAsk, ExchangeAdapter, FundingRate, MarketDetails, OrderResult, PositionInfo
 
 logger = logging.getLogger(__name__)
 
@@ -254,7 +254,7 @@ class EdgeXAdapter(ExchangeAdapter):
     async def place_order(
         self, symbol: str, side: str, size_base: float,
         price: float, market_id: int | str | None = None,
-    ) -> Optional[str]:
+    ) -> Optional[OrderResult]:
         try:
             from edgex_sdk import Client as EdgeXClient, CreateOrderParams, OrderSide, OrderType, TimeInForce
 
@@ -280,7 +280,7 @@ class EdgeXAdapter(ExchangeAdapter):
             # Order ID is nested: {"code": "SUCCESS", "data": {"orderId": "..."}}
             data = result.get("data", {})
             oid = data.get("orderId", "") if isinstance(data, dict) else result.get("orderId", "")
-            return str(oid) if oid else None
+            return OrderResult(order_id=str(oid) if oid else None)
         except ImportError:
             logger.warning("edgex-python-sdk not installed — order placement unavailable")
             return None
@@ -288,7 +288,7 @@ class EdgeXAdapter(ExchangeAdapter):
     async def close_position(
         self, symbol: str, side: str, size_base: float,
         price: float, market_id: int | str | None = None,
-    ) -> bool:
+    ) -> Optional[OrderResult]:
         try:
             from edgex_sdk import Client as EdgeXClient, CreateOrderParams, OrderSide, OrderType, TimeInForce
 
@@ -311,12 +311,14 @@ class EdgeXAdapter(ExchangeAdapter):
             result = await client.create_order(params)
             await client.close()
             if not result:
-                return False
+                return None
             if isinstance(result, dict) and result.get("code") != "SUCCESS":
                 logger.error("EdgeX close error: %s", result)
-                return False
+                return None
+            data = result.get("data", {}) if isinstance(result, dict) else {}
+            oid = data.get("orderId", "") if isinstance(data, dict) else ""
             logger.info("EdgeX close order placed: %s %s %s @ %s", symbol, side, size_base, price)
-            return True
+            return OrderResult(order_id=str(oid) if oid else None)
         except ImportError:
             logger.warning("edgex-python-sdk not installed — close unavailable")
-            return False
+            return None

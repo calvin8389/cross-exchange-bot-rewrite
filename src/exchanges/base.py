@@ -47,6 +47,20 @@ class MarketDetails:
     size_step: float
 
 
+@dataclass
+class OrderResult:
+    """Result returned by place_order / close_position.
+
+    ``order_id`` is the exchange-assigned identifier (may be None if the
+    exchange did not return one).  ``fill_price`` and ``fee`` are populated
+    when the exchange returns them immediately; otherwise they remain None
+    and should be filled in after position confirmation.
+    """
+    order_id: Optional[str]
+    fill_price: Optional[float] = None
+    fee: Optional[float] = None
+
+
 class ExchangeAdapter(ABC):
     @property
     @abstractmethod
@@ -71,13 +85,13 @@ class ExchangeAdapter(ABC):
     async def place_order(
         self, symbol: str, side: str, size_base: float,
         price: float, market_id: int | str | None = None,
-    ) -> Optional[str]: ...
+    ) -> Optional[OrderResult]: ...
 
     @abstractmethod
     async def close_position(
         self, symbol: str, side: str, size_base: float,
         price: float, market_id: int | str | None = None,
-    ) -> bool: ...
+    ) -> Optional[OrderResult]: ...
 
     @abstractmethod
     async def close(self) -> None: ...
