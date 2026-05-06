@@ -256,6 +256,8 @@ class HyperliquidAdapter(ExchangeAdapter):
                         if oid_val:
                             oid = str(oid_val)
                             break
+            if oid is None:
+                logger.warning("Hyperliquid close response missing oid: %s", result)
             return OrderResult(order_id=oid)
 
         return await asyncio.to_thread(_sync)
