@@ -209,7 +209,21 @@ async def open_position(
         await _fail_cycle(store, cycle_id, "Confirmation failed")
         raise RuntimeError("Position confirmation failed, both legs closed")
 
-    # ---- 6. Insert position record + legs ------------------------------
+    # ---- 6. Read actual fill prices from exchange positions -------------
+    long_positions, short_positions = await asyncio.gather(
+        long_adapter.get_open_positions(),
+        short_adapter.get_open_positions(),
+    )
+    long_fill_entry = next(
+        (p.entry_price for p in long_positions if p.symbol.upper() == opp.symbol.upper() and abs(p.size) > 1e-8),
+        long_price,  # fallback to limit price
+    )
+    short_fill_entry = next(
+        (p.entry_price for p in short_positions if p.symbol.upper() == opp.symbol.upper() and abs(p.size) > 1e-8),
+        short_price,  # fallback to limit price
+    )
+
+    # ---- 7. Insert position record + legs ------------------------------
     pos_row = await store.conn.execute(
         """INSERT INTO positions(cycle_id, symbol, is_active,
            exchange_long, exchange_short,
@@ -221,17 +235,17 @@ async def open_position(
     position_id = (await pos_row.fetchone())[0]
     await store.conn.commit()
 
-    # Insert leg records
+    # Insert leg records with actual fill prices
     await store.conn.execute(
         """INSERT INTO position_legs(position_id, exchange_id, side, size, entry_price, market_id, opened_at, updated_at)
            VALUES(?,?,?,?,?,?,?,?)""",
-        (position_id, opp.long_leg.exchange_id, "long", size_base, long_price,
+        (position_id, opp.long_leg.exchange_id, "long", size_base, long_fill_entry,
          str(long_market_id), utc_now_iso(), utc_now_iso()),
     )
     await store.conn.execute(
         """INSERT INTO position_legs(position_id, exchange_id, side, size, entry_price, market_id, opened_at, updated_at)
            VALUES(?,?,?,?,?,?,?,?)""",
-        (position_id, opp.short_leg.exchange_id, "short", size_base, short_price,
+        (position_id, opp.short_leg.exchange_id, "short", size_base, short_fill_entry,
          str(short_market_id), utc_now_iso(), utc_now_iso()),
     )
     await store.conn.commit()
@@ -240,7 +254,7 @@ async def open_position(
         "UPDATE cycles SET state='HOLDING', opened_at=?, "
         "long_size=?, short_size=?, long_entry_price=?, short_entry_price=?, "
         "updated_at=? WHERE id=?",
-        (utc_now_iso(), size_base, size_base, long_price, short_price, utc_now_iso(), cycle_id),
+        (utc_now_iso(), size_base, size_base, long_fill_entry, short_fill_entry, utc_now_iso(), cycle_id),
     )
     await store.conn.commit()
 
