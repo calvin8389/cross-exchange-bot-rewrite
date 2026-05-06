@@ -223,7 +223,6 @@ class GrvtAdapter(ExchangeAdapter):
                 amount=size_base,
                 price=price,
                 params={
-                    "post_only": True,
                     "order_duration_secs": 30 * 86400 - 1,
                 },
             )

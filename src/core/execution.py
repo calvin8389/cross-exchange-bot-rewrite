@@ -165,6 +165,37 @@ async def open_position(
         await _fail_cycle(store, cycle_id, "Both legs failed")
         raise RuntimeError(f"Both legs failed: long={long_err}, short={short_err}")
 
+    # Treat None return (silent failure, no exception) as failure
+    if not long_order_id and not long_err:
+        logger.error("Long leg (%s) returned None, rolling back", opp.long_leg.exchange_id)
+        await short_adapter.close_position(
+            symbol=opp.symbol, side="buy", size_base=size_base, price=short_price,
+            market_id=short_market_id,
+        )
+        try:
+            await long_adapter.close_position(
+                symbol=opp.symbol, side="sell", size_base=size_base, price=long_price,
+            )
+        except Exception:
+            pass
+        await _fail_cycle(store, cycle_id, f"Long leg ({opp.long_leg.exchange_id}) returned None")
+        raise RuntimeError(f"Long leg ({opp.long_leg.exchange_id}) returned None")
+
+    if not short_order_id and not short_err:
+        logger.error("Short leg (%s) returned None, rolling back", opp.short_leg.exchange_id)
+        await long_adapter.close_position(
+            symbol=opp.symbol, side="sell", size_base=size_base, price=long_price,
+        )
+        try:
+            await short_adapter.close_position(
+                symbol=opp.symbol, side="buy", size_base=size_base, price=short_price,
+                market_id=short_market_id,
+            )
+        except Exception:
+            pass
+        await _fail_cycle(store, cycle_id, f"Short leg ({opp.short_leg.exchange_id}) returned None")
+        raise RuntimeError(f"Short leg ({opp.short_leg.exchange_id}) returned None")
+
     # ---- 5. Confirm positions exist ------------------------------------
     confirmed = await _confirm_positions(
         long_adapter, short_adapter, opp.symbol, config,
