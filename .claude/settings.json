@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "Bash(git *)",
+      "Bash(pip *)",
+      "Bash(curl *)",
+      "Bash(open *)",
+      "Bash(find *)",
+      "Bash(grep *)",
+      "Bash(pkill *)",
+      "Bash(echo *)",
+      "Bash(mkdir *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(sleep *)",
+      "Bash(tail *)",
+      "Bash(head *)",
+      "Bash(wc *)",
+      "Bash(dig *)",
+      "Bash(which *)",
+      "Bash(source *)",
+      "Bash(pwd *)",
+      "Bash(ps *)",
+      "WebFetch(*)",
+      "WebSearch(*)"
+    ],
+    "deny": [
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf ~/*)",
+      "Bash(git push --force *)",
+      "Bash(git reset --hard *)",
+      "Bash(git clean *)",
+      "Bash(shutdown *)",
+      "Bash(reboot *)"
+    ]
+  }
+}

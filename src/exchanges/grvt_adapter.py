@@ -229,8 +229,11 @@ class GrvtAdapter(ExchangeAdapter):
             if not result:
                 logger.error("GRVT order returned None")
                 return None
-            oid = result.get("id") or result.get("order_id", "")
-            logger.info("GRVT order placed: %s %s %s @ %s", contract, side, size_base, price)
+            # SDK returns {"result": {"order_id": "0x...", "state": {...}}}
+            inner = result.get("result", result)
+            oid = inner.get("order_id", "")
+            logger.info("GRVT order placed: %s %s %s @ %s order_id=%s",
+                        contract, side, size_base, price, oid)
             return str(oid) if oid else None
 
         return await asyncio.to_thread(_sync)
