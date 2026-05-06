@@ -344,21 +344,40 @@ async def close_position(
         if attempt > 0:
             wider_pct = config.cross_pct * (1.0 + attempt * 0.5)
             logger.warning("Close retry %d/2 with cross_pct=%.1f%%", attempt, wider_pct)
-            long_bba, short_bba = await asyncio.gather(
-                long_adapter.get_best_bid_ask(long_market_id),
-                short_adapter.get_best_bid_ask(short_market_id),
-            )
-            long_close_px = cross_price("sell", long_bba.bid, long_bba.ask, tick=long_md.price_tick, cross_pct=wider_pct)
-            short_close_px = cross_price("buy", short_bba.bid, short_bba.ask, tick=short_md.price_tick, cross_pct=wider_pct)
 
-        await asyncio.gather(
-            long_adapter.close_position(symbol=symbol, side=close_long_side,
-                                        size_base=long_leg["size"], price=long_close_px),
-            short_adapter.close_position(symbol=symbol, side=close_short_side,
-                                         size_base=short_leg["size"], price=short_close_px,
-                                         market_id=short_market_id),
-            return_exceptions=True,
+        # Check which legs are still open; only retry those
+        long_positions, short_positions = await asyncio.gather(
+            long_adapter.get_open_positions(),
+            short_adapter.get_open_positions(),
         )
+        long_still_open = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in long_positions)
+        short_still_open = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in short_positions)
+
+        if not long_still_open and not short_still_open:
+            closed = True
+            break
+
+        close_tasks = []
+        if long_still_open:
+            if attempt > 0:
+                bba = await long_adapter.get_best_bid_ask(long_market_id)
+                long_close_px = cross_price("sell", bba.bid, bba.ask, tick=long_md.price_tick, cross_pct=wider_pct)
+            close_tasks.append(
+                long_adapter.close_position(symbol=symbol, side=close_long_side,
+                                            size_base=long_leg["size"], price=long_close_px)
+            )
+        if short_still_open:
+            if attempt > 0:
+                bba = await short_adapter.get_best_bid_ask(short_market_id)
+                short_close_px = cross_price("buy", bba.bid, bba.ask, tick=short_md.price_tick, cross_pct=wider_pct)
+            close_tasks.append(
+                short_adapter.close_position(symbol=symbol, side=close_short_side,
+                                             size_base=short_leg["size"], price=short_close_px,
+                                             market_id=short_market_id)
+            )
+
+        if close_tasks:
+            await asyncio.gather(*close_tasks, return_exceptions=True)
 
         if await _confirm_flat(long_adapter, short_adapter, symbol, config):
             closed = True

@@ -246,8 +246,6 @@ class HyperliquidAdapter(ExchangeAdapter):
 
         coin = str(market_id) if market_id else symbol.upper()
         is_buy = side == "buy"
-        # Cross by one tick to increase fill probability
-        px = price + 0.01 if is_buy else price - 0.01
 
         def _sync():
             exchange = self._get_exchange()
@@ -255,7 +253,7 @@ class HyperliquidAdapter(ExchangeAdapter):
                 name=coin,
                 is_buy=is_buy,
                 sz=size_base,
-                limit_px=round(px, 2),
+                limit_px=price,
                 order_type=OrderType(limit={"tif": "Ioc"}),
                 reduce_only=True,
             )
