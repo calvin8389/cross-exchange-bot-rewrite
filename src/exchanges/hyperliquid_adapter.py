@@ -117,16 +117,21 @@ class HyperliquidAdapter(ExchangeAdapter):
     # ------------------------------------------------------------------
 
     async def get_funding_rate(self, market_id: int | str) -> Optional[FundingRate]:
+        import time as _time
         coin = str(market_id)
         def _sync():
             info = self._get_info()
-            meta, asset_ctxs = info.meta_and_asset_ctxs()
+            # Cache meta+ctx to avoid repeated heavy calls (30s TTL)
+            if self._meta_cache and _time.monotonic() - self._meta_cache[0] < 30:
+                meta, asset_ctxs = self._meta_cache[1]
+            else:
+                meta, asset_ctxs = info.meta_and_asset_ctxs()
+                self._meta_cache = (_time.monotonic(), (meta, asset_ctxs))
             universe = meta["universe"]
             for i, entry in enumerate(universe):
                 if entry["name"].upper() == coin.upper() and i < len(asset_ctxs):
                     ctx = asset_ctxs[i]
                     rate = float(ctx.get("funding", 0) or 0)
-                    # rate is hourly funding rate; annualise to match other adapters
                     return FundingRate(rate=rate, apr=rate * 365 * 24 * 100)
             return None
         return await asyncio.to_thread(_sync)
