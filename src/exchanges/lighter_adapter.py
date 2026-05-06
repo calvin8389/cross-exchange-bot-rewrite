@@ -32,6 +32,7 @@ class LighterAdapter(ExchangeAdapter):
         from src.util.retry import RateLimiter
         self._rate_limiter = RateLimiter(max_per_minute=35)  # Lighter: 40/min, keep margin
         self._funding_cache: Optional[tuple[float, dict[int, tuple[float, float]]]] = None
+        self._market_cache: Optional[tuple[float, dict[str, MarketDetails]]] = None
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -48,6 +49,7 @@ class LighterAdapter(ExchangeAdapter):
             await self._session.close()
             self._session = None
         self._funding_cache = None
+        self._market_cache = None
 
     # ------------------------------------------------------------------
     # Balance (REST)
@@ -178,6 +180,14 @@ class LighterAdapter(ExchangeAdapter):
 
     async def get_market_details(self, symbol: str) -> MarketDetails:
         """Return Lighter market_id, price_tick, size_step for a symbol."""
+        import time as _time
+
+        # Return from cache if fresh (< 300s)
+        if self._market_cache and _time.monotonic() - self._market_cache[0] < 300:
+            cached = self._market_cache[1].get(symbol.upper())
+            if cached:
+                return cached
+
         session = await self._ensure_session()
         url = f"{self.rest_url}/api/v1/orderBooks"
         try:
@@ -185,12 +195,18 @@ class LighterAdapter(ExchangeAdapter):
                 if resp.status != 200:
                     raise RuntimeError(f"Lighter orderBooks HTTP {resp.status}")
                 data = await resp.json()
+                cache: dict[str, MarketDetails] = {}
                 for ob in data.get("order_books", []):
-                    if ob.get("symbol", "").upper() == symbol.upper():
-                        market_id = ob["market_id"]
-                        price_tick = 10 ** -ob.get("supported_price_decimals", 2)
-                        size_step = 10 ** -ob.get("supported_size_decimals", 2)
-                        return MarketDetails(market_id=market_id, price_tick=price_tick, size_step=size_step)
+                    sym = ob.get("symbol", "").upper()
+                    market_id = ob["market_id"]
+                    price_tick = 10 ** -ob.get("supported_price_decimals", 2)
+                    size_step = 10 ** -ob.get("supported_size_decimals", 2)
+                    cache[sym] = MarketDetails(market_id=market_id, price_tick=price_tick, size_step=size_step)
+
+                self._market_cache = (_time.monotonic(), cache)
+
+                if symbol.upper() in cache:
+                    return cache[symbol.upper()]
             raise ValueError(f"Symbol {symbol} not found on Lighter")
         except Exception as e:
             logger.warning("Lighter market details fetch failed: %s", e)

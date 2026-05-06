@@ -303,8 +303,12 @@ async def close_position(
         if attempt > 0:
             wider_pct = config.cross_pct * (1.0 + attempt * 0.5)
             logger.warning("Close retry %d/2 with cross_pct=%.1f%%", attempt, wider_pct)
-            long_close_px = cross_price("sell", long_bba.bid, long_bba.ask, tick=0.01, cross_pct=wider_pct)
-            short_close_px = cross_price("buy", short_bba.bid, short_bba.ask, tick=0.01, cross_pct=wider_pct)
+            long_bba, short_bba = await asyncio.gather(
+                long_adapter.get_best_bid_ask(long_market_id),
+                short_adapter.get_best_bid_ask(short_market_id),
+            )
+            long_close_px = cross_price("sell", long_bba.bid, long_bba.ask, tick=tick, cross_pct=wider_pct)
+            short_close_px = cross_price("buy", short_bba.bid, short_bba.ask, tick=tick, cross_pct=wider_pct)
 
         await asyncio.gather(
             long_adapter.close_position(symbol=symbol, side=close_long_side,

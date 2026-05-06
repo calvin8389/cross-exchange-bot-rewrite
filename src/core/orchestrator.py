@@ -497,12 +497,16 @@ class Orchestrator:
         logger.info("Closing %d position(s)", len(active))
 
         success_count = 0
-        for pos in active:
-            try:
-                await close_position(self.adapters, self.store, exec_config, position_id=pos["id"])
+        tasks = [
+            close_position(self.adapters, self.store, exec_config, position_id=pos["id"])
+            for pos in active
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for pos, result in zip(active, results):
+            if isinstance(result, Exception):
+                logger.error("Close position %d failed: %s", pos["id"], result)
+            else:
                 success_count += 1
-            except Exception as e:
-                logger.error("Close position %d failed: %s", pos["id"], e)
 
         still_open = await self.store.conn.execute_fetchall("SELECT id FROM positions WHERE is_active=1")
         if still_open:
@@ -522,6 +526,7 @@ class Orchestrator:
 
         if elapsed >= wait_seconds:
             logger.info("=== WAITING done - back to IDLE ===")
+            await self.store.cleanup_old_data(retention_days=7)
             self.state = BotState.IDLE
             await self.store.kv_set("state", "IDLE")
         else:

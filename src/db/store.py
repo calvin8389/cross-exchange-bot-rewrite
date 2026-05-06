@@ -68,3 +68,16 @@ class Store:
             (ts, ev.level, ev.event_type, ev.cycle_id, ev.position_id, json.dumps(ev.data, ensure_ascii=False), ev.message),
         )
         await self.conn.commit()
+
+    async def cleanup_old_data(self, retention_days: int = 7) -> None:
+        """Delete old funding snapshots and events beyond the retention window."""
+        await self.conn.execute(
+            "DELETE FROM funding_snapshots WHERE recorded_at < datetime('now', ?)",
+            (f"-{retention_days} days",),
+        )
+        await self.conn.execute(
+            "DELETE FROM events WHERE ts < datetime('now', ?)",
+            (f"-{retention_days} days",),
+        )
+        await self.conn.execute("PRAGMA optimize;")
+        await self.conn.commit()
