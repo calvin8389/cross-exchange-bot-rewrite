@@ -402,10 +402,14 @@ async def close_position(
             # Capture results for orders table
             _idx = 0
             if long_still_open:
-                close_results[0] = _results[_idx] if not isinstance(_results[_idx], Exception) else None
+                long_result = _results[_idx]
+                if not isinstance(long_result, Exception) and long_result is not None:
+                    close_results[0] = long_result
                 _idx += 1
             if short_still_open:
-                close_results[1] = _results[_idx] if not isinstance(_results[_idx], Exception) else None
+                short_result = _results[_idx]
+                if not isinstance(short_result, Exception) and short_result is not None:
+                    close_results[1] = short_result
 
         if await _confirm_flat(long_adapter, short_adapter, symbol, config):
             closed = True
