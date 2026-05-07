@@ -1,12 +1,28 @@
 import logging
 import sys
+from pathlib import Path
 
 
-def setup_logging() -> None:
+def setup_logging(log_dir: str = ".") -> None:
+    fmt = "%(asctime)s %(levelname)s %(name)s - %(message)s"
+
+    console = logging.StreamHandler(sys.stdout)
+    console.setLevel(logging.INFO)
+    console.setFormatter(logging.Formatter(fmt))
+
+    log_path = Path(log_dir) / "bot.log"
+    file_all = logging.FileHandler(log_path, encoding="utf-8")
+    file_all.setLevel(logging.INFO)
+    file_all.setFormatter(logging.Formatter(fmt))
+
+    err_path = Path(log_dir) / "bot_errors.log"
+    file_err = logging.FileHandler(err_path, encoding="utf-8")
+    file_err.setLevel(logging.ERROR)
+    file_err.setFormatter(logging.Formatter(fmt))
+
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
+        handlers=[console, file_all, file_err],
         force=True,
     )
 

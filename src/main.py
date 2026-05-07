@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import signal
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 from src.config import load_bot_config, load_env
-from src.core.orchestrator import Orchestrator
+from src.core.orchestrator import BotState, Orchestrator
 from src.db.store import Event, Store
 from src.exchanges.base import ExchangeAdapter
 from src.exchanges.edgex_adapter import EdgeXAdapter
@@ -82,6 +83,14 @@ async def main() -> None:
         logger.info("Monitoring %d symbols", len(bot_config.symbols_to_monitor))
 
         orch = Orchestrator(adapters, bot_config, store)
+
+        # SIGUSR1 → trigger emergency CLOSING without killing the process
+        def _request_close(signum, frame):  # noqa: ANN001
+            logger.warning("SIGUSR1 received — requesting emergency close of all positions")
+            orch.state = BotState.CLOSING
+
+        signal.signal(signal.SIGUSR1, _request_close)
+
         await store.kv_set("state", "BOOT")
         await store.append_event(Event(level="info", event_type="BOOT",
                                        data={"mode": "orchestrator", "exchanges": list(adapters.keys())}))
