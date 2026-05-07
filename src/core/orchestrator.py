@@ -25,6 +25,8 @@ from src.exchanges.base import ExchangeAdapter
 
 logger = logging.getLogger(__name__)
 PERCENT_MULTIPLIER = 100.0
+STOP_LOSS_BUFFER_RATIO = 0.7
+MIN_POSITION_SIZE = 1e-8
 
 
 class Orchestrator:
@@ -84,7 +86,9 @@ class Orchestrator:
 
     def _stop_loss_threshold_pct(self) -> float:
         leverage = max(1, self.bot_config.leverage)
-        return (PERCENT_MULTIPLIER / leverage) * 0.7
+        # Close if loss consumes ~70% of the inverse-leverage buffer, mirroring
+        # the legacy maintenance-margin-style stop-loss heuristic.
+        return (PERCENT_MULTIPLIER / leverage) * STOP_LOSS_BUFFER_RATIO
 
     # ------------------------------------------------------------------
     # Recovery
@@ -123,8 +127,8 @@ class Orchestrator:
                 all_ok = False
                 continue
 
-            long_match = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in long_positions)
-            short_match = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in short_positions)
+            long_match = any(p.symbol.upper() == symbol.upper() and abs(p.size) > MIN_POSITION_SIZE for p in long_positions)
+            short_match = any(p.symbol.upper() == symbol.upper() and abs(p.size) > MIN_POSITION_SIZE for p in short_positions)
 
             if not long_match and not short_match:
                 logger.warning("Recovery: %s flat on both exchanges - clearing", symbol)
@@ -299,7 +303,7 @@ class Orchestrator:
                         continue
                     try:
                         positions = await adapter.get_open_positions()
-                        target = next((p for p in positions if p.symbol.upper() == sym.upper() and abs(p.size) > 1e-8), None)
+                        target = next((p for p in positions if p.symbol.upper() == sym.upper() and abs(p.size) > MIN_POSITION_SIZE), None)
                         if not target:
                             continue
                         md = await adapter.get_market_details(sym)
@@ -381,11 +385,11 @@ class Orchestrator:
 
                 long_symbol_positions = [
                     p for p in long_positions
-                    if p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8
+                    if p.symbol.upper() == symbol.upper() and abs(p.size) > MIN_POSITION_SIZE
                 ]
                 short_symbol_positions = [
                     p for p in short_positions
-                    if p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8
+                    if p.symbol.upper() == symbol.upper() and abs(p.size) > MIN_POSITION_SIZE
                 ]
                 long_pnl = sum(p.unrealized_pnl for p in long_symbol_positions)
                 short_pnl = sum(p.unrealized_pnl for p in short_symbol_positions)

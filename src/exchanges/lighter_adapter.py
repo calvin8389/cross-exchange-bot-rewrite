@@ -12,6 +12,8 @@ from src.exchanges.base import Balance, BestBidAsk, ExchangeAdapter, FundingRate
 
 logger = logging.getLogger(__name__)
 _CLIENT_ORDER_ID_MAX = 2_147_483_647
+# Shift PID into a higher bit range before XOR so nearby PIDs perturb the seed
+# beyond the lowest timestamp bits, reducing restart-time seed collisions.
 _PID_MIX_SHIFT_BITS = 16
 
 
