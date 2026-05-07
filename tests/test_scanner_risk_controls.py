@@ -34,7 +34,6 @@ async def test_scan_filters_out_candidates_after_cost_adjustment():
     config = ScanConfig(
         symbols=["BTC"],
         min_net_apr_threshold=1.0,
-        hold_duration_hours=8.0,
         estimated_taker_fee_bps=10.0,
         estimated_slippage_bps=10.0,
         estimated_impact_bps=10.0,
@@ -54,15 +53,13 @@ async def test_scan_records_gross_and_cost_apr():
     config = ScanConfig(
         symbols=["BTC"],
         min_net_apr_threshold=0.1,
-        hold_duration_hours=24.0 * 365,
-        estimated_taker_fee_bps=1.0,
-        estimated_slippage_bps=1.0,
-        estimated_impact_bps=1.0,
+        estimated_taker_fee_bps=0.0,
+        estimated_slippage_bps=0.0,
+        estimated_impact_bps=0.0,
     )
 
     results = await scan_all(adapters, config)
 
     assert len(results) == 1
     assert results[0].gross_apr == pytest.approx(15.0)
-    assert results[0].estimated_cost_apr > 0
-    assert results[0].net_apr < results[0].gross_apr
+    assert results[0].net_apr == pytest.approx(15.0)

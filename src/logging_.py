@@ -6,7 +6,8 @@ from pathlib import Path
 def setup_logging(log_dir: str = ".") -> None:
     fmt = "%(asctime)s %(levelname)s %(name)s - %(message)s"
 
-    console = logging.StreamHandler(sys.stdout)
+    # Write to stderr so stdout redirects (>> bot.log) don't duplicate file handler output
+    console = logging.StreamHandler(sys.stderr)
     console.setLevel(logging.INFO)
     console.setFormatter(logging.Formatter(fmt))
 

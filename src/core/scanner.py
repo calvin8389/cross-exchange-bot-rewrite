@@ -18,14 +18,15 @@ class ScanConfig:
     max_spread_pct: float = 0.15
     min_net_apr_threshold: float = 5.0
     symbols: list[str] = field(default_factory=list)
-    hold_duration_hours: float = 8.0
     estimated_taker_fee_bps: float = 4.0
     estimated_slippage_bps: float = 2.0
     estimated_impact_bps: float = 1.0
+    # Per-symbol exchange exclusions: {"LDO": ["edgex"]} skips LDO on EdgeX
+    symbol_exchange_excludes: dict[str, list[str]] = field(default_factory=dict)
 
 
 def _estimate_cost_apr(config: ScanConfig) -> float:
-    hold_hours = max(config.hold_duration_hours, 1.0)
+    hold_hours = 8.0
     # 4 = 2 legs (long + short) × 2 trades (open + close)
     round_trip_cost_pct = (
         (config.estimated_taker_fee_bps + config.estimated_slippage_bps + config.estimated_impact_bps)
@@ -44,8 +45,9 @@ async def scan_all(
     """Scan all symbols across all exchange pairs, return opportunities sorted by net APR."""
 
     async def _scan_one(symbol: str) -> list[Opportunity]:
-        # Fetch data from all exchanges concurrently
-        adapter_ids = list(adapters.keys())
+        # Fetch data from all exchanges concurrently, skipping excluded pairs
+        excluded_exchanges = set(config.symbol_exchange_excludes.get(symbol, []))
+        adapter_ids = [eid for eid in adapters.keys() if eid not in excluded_exchanges]
         tasks = [_fetch_exchange_data(adapters[eid], symbol, eid) for eid in adapter_ids]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 

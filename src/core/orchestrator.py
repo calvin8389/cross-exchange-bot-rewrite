@@ -272,10 +272,10 @@ class Orchestrator:
             min_net_apr_threshold=threshold,
             max_spread_pct=self.bot_config.max_spread_pct,
             min_volume_usd=self.bot_config.min_volume_usd,
-            hold_duration_hours=self.bot_config.hold_duration_hours,
             estimated_taker_fee_bps=self.bot_config.estimated_taker_fee_bps,
             estimated_slippage_bps=self.bot_config.estimated_slippage_bps,
             estimated_impact_bps=self.bot_config.estimated_impact_bps,
+            symbol_exchange_excludes=self.bot_config.symbol_exchange_excludes,
         )
 
         try:
@@ -334,9 +334,9 @@ class Orchestrator:
             return
         logger.info("=== OPENING %d positions ===", len(batch))
 
-        opened: list[tuple[str, str, str]] = []
+        opened_count = 0
 
-        async def _open_one(opp: Opportunity):
+        for opp in batch:
             notional = self._get_notional(opp.symbol)
             cfg = ExecConfig(
                 leverage=self.bot_config.leverage,
@@ -350,51 +350,48 @@ class Orchestrator:
             logger.info("  Opening %s ($%.0f) pair=%s/%s net_apr=%.2f%%",
                         opp.symbol, notional, opp.long_leg.exchange_id,
                         opp.short_leg.exchange_id, opp.net_apr)
-            async with self._db_lock:  # serialize SQLite writes across concurrent opens
-                try:
+            try:
+                async with self._db_lock:
                     result = await open_position(opp, self.adapters, self.store, cfg)
-                    opened.append((opp.symbol, opp.long_leg.exchange_id, opp.short_leg.exchange_id))
-                    logger.info("  OK %s opened size=%.6f", opp.symbol,
-                                result.legs[opp.long_leg.exchange_id]["size"])
-                except Exception as e:
-                    logger.error("  FAIL %s open: %s", opp.symbol, e)
-                    raise
-
-        results = await asyncio.gather(*[_open_one(opp) for opp in batch], return_exceptions=True)
-        failures = [(batch[i], results[i]) for i in range(len(batch)) if isinstance(results[i], Exception)]
-
-        if failures:
-            logger.error("%d positions failed to open; rolling back %d opened", len(failures), len(opened))
-            # Rollback directly from exchange positions, NOT from DB
-            for sym, long_ex, short_ex in opened:
-                logger.warning("  Rolling back %s (%s/%s)", sym, long_ex, short_ex)
-                for ex_id, close_side in [(long_ex, "sell"), (short_ex, "buy")]:
+                opened_count += 1
+                logger.info("  OK %s opened size=%.6f", opp.symbol,
+                            result.legs[opp.long_leg.exchange_id]["size"])
+            except UnhedgedExposureError as e:
+                logger.error("  FAIL %s (UnhedgedExposure) - entering ERROR: %s", opp.symbol, e)
+                self.state = BotState.ERROR
+                await self.store.kv_set("state", "ERROR")
+                return
+            except Exception as e:
+                logger.error("  FAIL %s: %s - rolling back and skipping", opp.symbol, e)
+                for ex_id in [opp.long_leg.exchange_id, opp.short_leg.exchange_id]:
                     adapter = self.adapters.get(ex_id)
                     if not adapter:
                         continue
                     try:
                         positions = await adapter.get_open_positions()
-                        target = next((p for p in positions if p.symbol.upper() == sym.upper() and abs(p.size) > MIN_POSITION_SIZE), None)
+                        target = next(
+                            (p for p in positions if p.symbol.upper() == opp.symbol.upper() and abs(p.size) > MIN_POSITION_SIZE),
+                            None,
+                        )
                         if not target:
                             continue
-                        md = await adapter.get_market_details(sym)
+                        md = await adapter.get_market_details(opp.symbol)
                         bba = await adapter.get_best_bid_ask(md.market_id)
                         actual_side = "sell" if target.size > 0 else "buy"
                         px = bba.bid if actual_side == "sell" else bba.ask
-                        await adapter.close_position(sym, actual_side, abs(target.size), px, md.market_id)
+                        await adapter.close_position(opp.symbol, actual_side, abs(target.size), px, md.market_id)
                         logger.info("  Rolled back %s %s %.4f", ex_id, actual_side, abs(target.size))
                     except Exception as e2:
-                        logger.error("  Rollback %s/%s failed: %s", sym, ex_id, e2)
-            if any(isinstance(err, UnhedgedExposureError) for _, err in failures):
-                self.state = BotState.ERROR
-                await self.store.kv_set("state", "ERROR")
-            else:
-                self.state = BotState.IDLE
-                await self.store.kv_set("state", "IDLE")
+                        logger.error("  Rollback %s/%s failed: %s", opp.symbol, ex_id, e2)
+
+        if opened_count == 0:
+            logger.warning("OPENING: all %d candidates failed - back to IDLE", len(batch))
+            self.state = BotState.IDLE
+            await self.store.kv_set("state", "IDLE")
             return
 
         self.state = BotState.HOLDING
-        logger.info("=== HOLDING %d position(s) ===", len(batch))
+        logger.info("=== HOLDING %d/%d position(s) ===", opened_count, len(batch))
         await self.store.kv_set("state", "HOLDING")
 
     # ------------------------------------------------------------------
@@ -402,7 +399,7 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     async def _do_holding(self) -> None:
-        threshold = self.bot_config.min_net_apr_threshold
+        threshold = self.bot_config.exit_net_apr_threshold
 
         rows = await self.store.conn.execute("SELECT * FROM positions WHERE is_active=1")
         active = await rows.fetchall()
@@ -540,27 +537,6 @@ class Orchestrator:
                             still_open += 1
                         continue
 
-                max_hold_hours = self.bot_config.hold_duration_hours
-                held_hours = self._position_age_hours(pos["opened_at"])
-                if max_hold_hours > 0 and held_hours >= max_hold_hours:
-                    logger.info(
-                        "MAX HOLD %s: held %.2fh >= %.2fh - closing position %d",
-                        symbol, held_hours, max_hold_hours, pos_id,
-                    )
-                    closed = await _close_current_position(
-                        "CLOSE_MAX_HOLD",
-                        "MAX_HOLD",
-                        {
-                            "symbol": symbol,
-                            "held_hours": held_hours,
-                            "max_hold_hours": max_hold_hours,
-                        },
-                    )
-                    if closed:
-                        continue
-                    still_open += 1
-                    continue
-
             # Re-check funding rate spread for this position
             if not long_adapter or not short_adapter:
                 still_open += 1
@@ -658,10 +634,10 @@ class Orchestrator:
                 min_net_apr_threshold=threshold,
                 max_spread_pct=self.bot_config.max_spread_pct,
                 min_volume_usd=self.bot_config.min_volume_usd,
-                hold_duration_hours=self.bot_config.hold_duration_hours,
                 estimated_taker_fee_bps=self.bot_config.estimated_taker_fee_bps,
                 estimated_slippage_bps=self.bot_config.estimated_slippage_bps,
                 estimated_impact_bps=self.bot_config.estimated_impact_bps,
+                symbol_exchange_excludes=self.bot_config.symbol_exchange_excludes,
             )
             candidates = await scan_all(self.adapters, scan_config)
 

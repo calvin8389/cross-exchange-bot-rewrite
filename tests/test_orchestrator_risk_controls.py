@@ -113,40 +113,6 @@ class TestHoldingRiskControls:
         )
         assert len(event_rows) == 1
 
-    async def test_holding_closes_when_max_hold_exceeded(self, store):
-        _, position_id = await _insert_active_position(
-            store,
-            symbol="BTC",
-            opened_at="2025-01-01T00:00:00Z",
-        )
-        adapters = _make_adapters(long_pnl=0.0, short_pnl=0.0)
-        config = BotConfig(
-            symbols_to_monitor=["BTC"],
-            leverage=3,
-            hold_duration_hours=0.5,
-            enable_stop_loss=False,
-            check_interval_seconds=0,
-            max_concurrent_positions=1,
-        )
-        orch = Orchestrator(adapters=adapters, bot_config=config, store=store)
-        orch.state = BotState.HOLDING
-
-        async def _fake_close(*args, **kwargs):
-            await _mark_position_closed(store, position_id)
-
-        with patch("src.core.orchestrator.close_position", new=AsyncMock(side_effect=_fake_close)) as close_mock, \
-                patch("src.core.orchestrator.scan_all", new=AsyncMock(return_value=[])):
-            await orch._do_holding()
-
-        close_mock.assert_awaited_once()
-        assert orch.state == BotState.WAITING
-
-        events = await store.conn.execute_fetchall(
-            "SELECT event_type, data_json FROM events WHERE position_id=? ORDER BY id",
-            (position_id,),
-        )
-        assert any(event["event_type"] == "CLOSE_MAX_HOLD" for event in events)
-
     async def test_holding_closes_when_stop_loss_triggered(self, store):
         _, position_id = await _insert_active_position(
             store,
@@ -157,7 +123,6 @@ class TestHoldingRiskControls:
         config = BotConfig(
             symbols_to_monitor=["ETH"],
             leverage=10,
-            hold_duration_hours=48.0,
             enable_stop_loss=True,
             check_interval_seconds=0,
             max_concurrent_positions=1,
@@ -209,7 +174,6 @@ class TestHoldingRiskControls:
 
         config = BotConfig(
             symbols_to_monitor=["SOL"],
-            hold_duration_hours=10_000.0,
             enable_stop_loss=False,
             check_interval_seconds=0,
             runtime_failure_alert_threshold=1,

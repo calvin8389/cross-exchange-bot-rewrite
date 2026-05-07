@@ -40,10 +40,10 @@ class BotConfig:
     quote: str = "USD"
     leverage: int = 3
     notional_per_position: float = 100.0
-    hold_duration_hours: float = 8.0
     wait_between_cycles_minutes: float = 5.0
     check_interval_seconds: int = 60
-    min_net_apr_threshold: float = 5.0
+    min_net_apr_threshold: float = 5.0   # entry: scanner only opens when net_apr >= this
+    exit_net_apr_threshold: float = 5.0  # exit: holding closes when net_apr drops below this
     min_volume_usd: float = 250_000_000
     max_spread_pct: float = 0.15
     cross_pct: float = 3.0
@@ -63,6 +63,8 @@ class BotConfig:
     max_total_drawdown_usd: float = 0.0
     # Runtime alert thresholds
     runtime_failure_alert_threshold: int = 3
+    # Per-symbol exchange exclusions: {"LDO": ["edgex"]} skips LDO on EdgeX in scanner
+    symbol_exchange_excludes: dict[str, list[str]] = field(default_factory=dict)
 
 
 def load_env() -> Env:
@@ -117,10 +119,10 @@ def load_bot_config(path: str = "bot_config.json") -> BotConfig:
         quote=raw.get("quote", "USD"),
         leverage=raw.get("leverage", 3),
         notional_per_position=raw.get("notional_per_position", 100.0),
-        hold_duration_hours=raw.get("hold_duration_hours", 8.0),
         wait_between_cycles_minutes=raw.get("wait_between_cycles_minutes", 5.0),
         check_interval_seconds=raw.get("check_interval_seconds", 60),
         min_net_apr_threshold=raw.get("min_net_apr_threshold", 5.0),
+        exit_net_apr_threshold=raw.get("exit_net_apr_threshold", raw.get("min_net_apr_threshold", 5.0)),
         min_volume_usd=raw.get("min_volume_usd", 250_000_000),
         max_spread_pct=raw.get("max_spread_pct", 0.15),
         cross_pct=raw.get("cross_pct", 3.0),
@@ -136,4 +138,5 @@ def load_bot_config(path: str = "bot_config.json") -> BotConfig:
         max_total_exposure_usd=raw.get("max_total_exposure_usd", 0.0),
         max_total_drawdown_usd=raw.get("max_total_drawdown_usd", 0.0),
         runtime_failure_alert_threshold=raw.get("runtime_failure_alert_threshold", 3),
+        symbol_exchange_excludes=raw.get("symbol_exchange_excludes", {}),
     )
