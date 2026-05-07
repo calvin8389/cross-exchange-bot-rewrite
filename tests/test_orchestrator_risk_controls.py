@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest_asyncio
+from src.util.time import utc_now_iso
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -187,7 +188,7 @@ class TestHoldingRiskControls:
         await _insert_active_position(
             store,
             symbol="SOL",
-            opened_at="2025-01-01T00:00:00Z",
+            opened_at=utc_now_iso(),
             entry_price=100.0,
             size=1.0,
         )
@@ -208,7 +209,7 @@ class TestHoldingRiskControls:
 
         config = BotConfig(
             symbols_to_monitor=["SOL"],
-            hold_duration_hours=48.0,
+            hold_duration_hours=10_000.0,
             enable_stop_loss=False,
             check_interval_seconds=0,
             runtime_failure_alert_threshold=1,

@@ -51,12 +51,16 @@ def _fake_market_details(symbol: str, exchange: str, use_fixture: bool = False):
             cm.market_id = c["market_id"]
             cm.price_tick = c["price_tick"]
             cm.size_step = c["size_step"]
+            cm.min_order_size = c.get("min_order_size", c.get("min_base_amount", c["size_step"]))
+            cm.min_notional = c.get("min_quote_amount", 0.0) or 0.0
             return cm
 
     cm = MagicMock()
     cm.market_id = f"{exchange}_{symbol}"
     cm.price_tick = 0.1
     cm.size_step = 0.001
+    cm.min_order_size = 0.001
+    cm.min_notional = 0.0
     return cm
 
 

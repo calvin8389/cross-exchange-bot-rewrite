@@ -690,8 +690,8 @@ class Orchestrator:
 
                 async def _open_one(opp):
                     notional = self._get_notional(opp.symbol)
-                     cfg = ExecConfig(leverage=self.bot_config.leverage,
-                                      cross_pct=self.bot_config.cross_pct,
+                    cfg = ExecConfig(leverage=self.bot_config.leverage,
+                                     cross_pct=self.bot_config.cross_pct,
                                      notional_override=notional,
                                      max_symbol_exposure_usd=self.bot_config.max_symbol_exposure_usd,
                                      max_exchange_exposure_usd=self.bot_config.max_exchange_exposure_usd,
