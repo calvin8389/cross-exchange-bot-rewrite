@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from src.config import BotConfig
@@ -23,6 +24,9 @@ from src.db.store import Event, Store
 from src.exchanges.base import ExchangeAdapter
 
 logger = logging.getLogger(__name__)
+PERCENT_MULTIPLIER = 100.0
+STOP_LOSS_BUFFER_RATIO = 0.7
+MIN_POSITION_SIZE = 1e-8
 
 
 class Orchestrator:
@@ -65,6 +69,24 @@ class Orchestrator:
         amounts = self.bot_config.position_tiers
         tier = tiers.get(symbol.upper(), "medium")
         return amounts.get(tier, self.bot_config.notional_per_position)
+
+    def _position_age_hours(self, opened_at: str | None) -> float:
+        if not opened_at:
+            return 0.0
+        try:
+            if opened_at.endswith("Z"):
+                opened_dt = datetime.fromisoformat(opened_at.removesuffix("Z")).replace(tzinfo=timezone.utc)
+            else:
+                opened_dt = datetime.fromisoformat(opened_at)
+                if opened_dt.tzinfo is None:
+                    opened_dt = opened_dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return 0.0
+        return max(0.0, (datetime.now(timezone.utc) - opened_dt).total_seconds() / 3600)
+
+    def _stop_loss_threshold_pct(self) -> float:
+        leverage = max(1, self.bot_config.leverage)
+        return (PERCENT_MULTIPLIER / leverage) * STOP_LOSS_BUFFER_RATIO
 
     # ------------------------------------------------------------------
     # Recovery
@@ -338,8 +360,16 @@ class Orchestrator:
                     long_positions = []
                     short_positions = []
 
-                long_pnl = sum(p.unrealized_pnl for p in long_positions)
-                short_pnl = sum(p.unrealized_pnl for p in short_positions)
+                long_symbol_positions = [
+                    p for p in long_positions
+                    if p.symbol.upper() == symbol.upper() and abs(p.size) > MIN_POSITION_SIZE
+                ]
+                short_symbol_positions = [
+                    p for p in short_positions
+                    if p.symbol.upper() == symbol.upper() and abs(p.size) > MIN_POSITION_SIZE
+                ]
+                long_pnl = sum(p.unrealized_pnl for p in long_symbol_positions)
+                short_pnl = sum(p.unrealized_pnl for p in short_symbol_positions)
 
                 leg_rows = await self.store.conn.execute(
                     "SELECT * FROM position_legs WHERE position_id=?", (pos_id,)
@@ -359,8 +389,8 @@ class Orchestrator:
                 await self.store.conn.commit()
 
                 # Detect broken legs: one side flat, the other not
-                long_still_there = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in long_positions)
-                short_still_there = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in short_positions)
+                long_still_there = bool(long_symbol_positions)
+                short_still_there = bool(short_symbol_positions)
                 if long_still_there != short_still_there:
                     broken_side = long_ex if long_still_there else short_ex
                     flat_side = short_ex if long_still_there else long_ex
@@ -373,6 +403,56 @@ class Orchestrator:
                     self.state = BotState.ERROR
                     await self.store.kv_set("state", "ERROR")
                     return
+
+                # Stop loss check
+                avg_leg_notional = 0.0
+                if legs:
+                    leg_notionals = [abs(leg["size"] * leg["entry_price"]) for leg in legs]
+                    if leg_notionals:
+                        avg_leg_notional = sum(leg_notionals) / len(leg_notionals)
+
+                total_unrealized_pnl = long_pnl + short_pnl
+                if self.bot_config.enable_stop_loss and avg_leg_notional > 0:
+                    stop_loss_pct = self._stop_loss_threshold_pct()
+                    loss_pct = max(0.0, (-total_unrealized_pnl / avg_leg_notional) * PERCENT_MULTIPLIER)
+                    if loss_pct >= stop_loss_pct:
+                        logger.warning(
+                            "STOP LOSS %s: loss_pct=%.2f%% threshold=%.2f%% pnl=%.4f",
+                            symbol, loss_pct, stop_loss_pct, total_unrealized_pnl,
+                        )
+                        try:
+                            await close_position(self.adapters, self.store,
+                                                 ExecConfig(cross_pct=self.bot_config.cross_pct),
+                                                 position_id=pos_id)
+                            closed_ids.append(pos_id)
+                            await self.store.append_event(Event(
+                                level="info", event_type="CLOSE_STOP_LOSS", position_id=pos_id,
+                                data={"symbol": symbol, "loss_pct": loss_pct, "threshold_pct": stop_loss_pct},
+                            ))
+                        except Exception as e:
+                            logger.error("Stop loss close %s failed: %s", symbol, e)
+                            still_open += 1
+                        continue
+
+                # Max hold duration check
+                max_hold_hours = self.bot_config.hold_duration_hours
+                held_hours = self._position_age_hours(pos["opened_at"])
+                if max_hold_hours > 0 and held_hours >= max_hold_hours:
+                    logger.info("MAX HOLD %s: held %.2fh >= %.2fh - closing position %d",
+                                symbol, held_hours, max_hold_hours, pos_id)
+                    try:
+                        await close_position(self.adapters, self.store,
+                                             ExecConfig(cross_pct=self.bot_config.cross_pct),
+                                             position_id=pos_id)
+                        closed_ids.append(pos_id)
+                        await self.store.append_event(Event(
+                            level="info", event_type="CLOSE_MAX_HOLD", position_id=pos_id,
+                            data={"symbol": symbol, "held_hours": held_hours, "max_hold_hours": max_hold_hours},
+                        ))
+                    except Exception as e:
+                        logger.error("Max hold close %s failed: %s", symbol, e)
+                        still_open += 1
+                    continue
 
             # Re-check funding rate spread for this position
             if not long_adapter or not short_adapter:
@@ -501,7 +581,16 @@ class Orchestrator:
                                 opp.short_leg.exchange_id, opp.net_apr)
                     await open_position(opp, self.adapters, self.store, cfg)
 
-                await asyncio.gather(*[_open_one(opp) for opp in new_positions], return_exceptions=True)
+                open_results = await asyncio.gather(
+                    *[_open_one(opp) for opp in new_positions], return_exceptions=True
+                )
+                for opp, result in zip(new_positions, open_results):
+                    if isinstance(result, Exception):
+                        logger.error("Replacement open failed for %s: %s", opp.symbol, result)
+                        await self.store.append_event(Event(
+                            level="error", event_type="REPLACEMENT_OPEN_FAILED",
+                            data={"symbol": opp.symbol, "error": str(result)},
+                        ))
 
         # Check final state
         rows3 = await self.store.conn.execute("SELECT id FROM positions WHERE is_active=1")

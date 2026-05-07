@@ -359,6 +359,7 @@ async def close_position(
     ))
 
     closed = False
+    close_results: list[Optional[OrderResult]] = [None, None]  # [long, short]
     for attempt in range(3):  # up to 2 retries
         if attempt > 0:
             wider_pct = config.cross_pct * (1.0 + attempt * 0.5)
@@ -376,7 +377,6 @@ async def close_position(
             closed = True
             break
 
-        close_results: list[Optional[OrderResult]] = [None, None]  # [long, short]
         close_tasks = []
         if long_still_open:
             if attempt > 0:
@@ -428,14 +428,27 @@ async def close_position(
     long_size = long_leg["size"]
     short_size = short_leg["size"]
 
+    close_long_result, close_short_result = close_results[0], close_results[1]
+    # Use actual fill price from OrderResult if available, else cross_price estimate
+    long_fill_close_px = (
+        close_long_result.fill_price
+        if close_long_result and close_long_result.fill_price is not None
+        else long_close_px
+    )
+    short_fill_close_px = (
+        close_short_result.fill_price
+        if close_short_result and close_short_result.fill_price is not None
+        else short_close_px
+    )
+
     # Long leg: opened BUY → closed SELL: PnL = (close - entry) * size
-    long_realized = (long_close_px - long_entry) * long_size
+    long_realized = (long_fill_close_px - long_entry) * long_size
     # Short leg: opened SELL → closed BUY: PnL = (entry - close) * size
-    short_realized = (short_entry - short_close_px) * short_size
+    short_realized = (short_entry - short_fill_close_px) * short_size
 
     # Update leg records with close prices
     for leg in [long_leg, short_leg]:
-        close_px = long_close_px if leg["exchange_id"] == exchange_long_id else short_close_px
+        close_px = long_fill_close_px if leg["exchange_id"] == exchange_long_id else short_fill_close_px
         await store.conn.execute(
             "UPDATE position_legs SET close_price=?, updated_at=? WHERE id=?",
             (close_px, utc_now_iso(), leg["id"]),
@@ -463,16 +476,15 @@ async def close_position(
     await store.conn.commit()
 
     # Insert CLOSE order records
-    close_long_result, close_short_result = close_results[0], close_results[1]
     close_now = utc_now_iso()
     close_legs = [
         (cycle_id, pos["id"], exchange_long_id, symbol, "CLOSE", close_long_side,
-         close_long_result.order_id if close_long_result else None, long_close_px, long_close_px,
-         long_leg["size"], long_close_px * long_leg["size"],
+         close_long_result.order_id if close_long_result else None, long_close_px, long_fill_close_px,
+         long_leg["size"], long_fill_close_px * long_leg["size"],
          close_long_result.fee if close_long_result else 0.0, close_now),
         (cycle_id, pos["id"], exchange_short_id, symbol, "CLOSE", close_short_side,
-         close_short_result.order_id if close_short_result else None, short_close_px, short_close_px,
-         short_leg["size"], short_close_px * short_leg["size"],
+         close_short_result.order_id if close_short_result else None, short_close_px, short_fill_close_px,
+         short_leg["size"], short_fill_close_px * short_leg["size"],
          close_short_result.fee if close_short_result else 0.0, close_now),
     ]
     await store.conn.executemany(

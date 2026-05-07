@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -10,6 +11,8 @@ import aiohttp
 from src.exchanges.base import Balance, BestBidAsk, ExchangeAdapter, FundingRate, MarketDetails, OrderResult, PositionInfo
 
 logger = logging.getLogger(__name__)
+_CLIENT_ORDER_ID_MAX = 2_147_483_647
+_PID_MIX_SHIFT_BITS = 16
 
 
 class LighterAdapter(ExchangeAdapter):
@@ -33,6 +36,9 @@ class LighterAdapter(ExchangeAdapter):
         self._rate_limiter = RateLimiter(max_per_minute=35)  # Lighter: 40/min, keep margin
         self._funding_cache: Optional[tuple[float, dict[int, tuple[float, float]]]] = None
         self._market_cache: Optional[tuple[float, dict[str, MarketDetails]]] = None
+        self._order_id_lock = asyncio.Lock()
+        seed = time.time_ns() ^ (os.getpid() << _PID_MIX_SHIFT_BITS)
+        self._client_order_seq = int(seed % _CLIENT_ORDER_ID_MAX) or 1
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -49,6 +55,14 @@ class LighterAdapter(ExchangeAdapter):
             self._session = None
         self._funding_cache = None
         self._market_cache = None
+
+    async def next_client_order_id(self) -> int:
+        """Generate a process-local, monotonic client order ID."""
+        async with self._order_id_lock:
+            self._client_order_seq += 1
+            if self._client_order_seq > _CLIENT_ORDER_ID_MAX:
+                self._client_order_seq = 1
+            return self._client_order_seq
 
     # ------------------------------------------------------------------
     # Balance (REST)
@@ -234,7 +248,7 @@ class LighterAdapter(ExchangeAdapter):
         md = await self.get_market_details(symbol)
         base_scaled = int(round(size_base / md.size_step))
         price_scaled = int(price / md.price_tick)
-        client_order_id = int(time.time() * 1_000_000) % 1_000_000
+        client_order_id = await self.next_client_order_id()
 
         signer = lighter.SignerClient(
             url=base_url,
@@ -346,7 +360,7 @@ class LighterAdapter(ExchangeAdapter):
         md = await self.get_market_details(symbol)
         base_scaled = int(round(size_base / md.size_step))
         price_scaled = int(price / md.price_tick)
-        client_order_id = int(time.time() * 1_000_000) % 1_000_000
+        client_order_id = await self.next_client_order_id()
 
         signer = lighter.SignerClient(
             url=base_url,
@@ -376,4 +390,5 @@ class LighterAdapter(ExchangeAdapter):
 
 
 def _lighter_private_key() -> str:
+    return os.environ.get("LIGHTER_PRIVATE_KEY") or os.environ.get("API_KEY_PRIVATE_KEY") or ""
     return os.environ.get("LIGHTER_PRIVATE_KEY") or os.environ.get("API_KEY_PRIVATE_KEY") or ""
