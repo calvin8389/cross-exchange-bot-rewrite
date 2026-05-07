@@ -13,7 +13,7 @@ async def test_lighter_client_order_ids_are_unique_and_monotonic():
         account_index=0,
     )
     try:
-        ids = [await adapter._next_client_order_id() for _ in range(500)]
+        ids = [await adapter.next_client_order_id() for _ in range(500)]
         assert len(ids) == len(set(ids))
         assert ids == sorted(ids)
     finally:

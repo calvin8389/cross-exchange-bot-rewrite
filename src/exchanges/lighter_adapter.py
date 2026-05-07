@@ -35,7 +35,7 @@ class LighterAdapter(ExchangeAdapter):
         self._funding_cache: Optional[tuple[float, dict[int, tuple[float, float]]]] = None
         self._market_cache: Optional[tuple[float, dict[str, MarketDetails]]] = None
         self._order_id_lock = asyncio.Lock()
-        self._client_order_seq = int(time.time_ns() % 2_147_483_647) or 1
+        self._client_order_seq = int(time.time_ns() % 2_147_483_646) + 1
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -53,7 +53,7 @@ class LighterAdapter(ExchangeAdapter):
         self._funding_cache = None
         self._market_cache = None
 
-    async def _next_client_order_id(self) -> int:
+    async def next_client_order_id(self) -> int:
         """Generate a process-local, monotonic client order ID."""
         async with self._order_id_lock:
             self._client_order_seq += 1
@@ -245,7 +245,7 @@ class LighterAdapter(ExchangeAdapter):
         md = await self.get_market_details(symbol)
         base_scaled = int(round(size_base / md.size_step))
         price_scaled = int(price / md.price_tick)
-        client_order_id = await self._next_client_order_id()
+        client_order_id = await self.next_client_order_id()
 
         signer = lighter.SignerClient(
             url=base_url,
@@ -357,7 +357,7 @@ class LighterAdapter(ExchangeAdapter):
         md = await self.get_market_details(symbol)
         base_scaled = int(round(size_base / md.size_step))
         price_scaled = int(price / md.price_tick)
-        client_order_id = await self._next_client_order_id()
+        client_order_id = await self.next_client_order_id()
 
         signer = lighter.SignerClient(
             url=base_url,
