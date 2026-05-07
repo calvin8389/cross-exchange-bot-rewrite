@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS cycles (
   updated_at TEXT NOT NULL
 );
 
--- Active position (at most one is_active=1 enforced by partial unique index)
+-- Active positions (multi-position supported; one row per position)
 CREATE TABLE IF NOT EXISTS positions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   cycle_id INTEGER NOT NULL REFERENCES cycles(id),

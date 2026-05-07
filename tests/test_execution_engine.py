@@ -249,6 +249,61 @@ class TestClosePosition:
         cycles = await store.conn.execute_fetchall("SELECT state FROM cycles WHERE id=?", (cycle_id,))
         assert cycles[0]["state"] == "ERROR"
 
+    async def test_close_uses_fill_price_for_realized_pnl_and_order_fill(self, store, config):
+        a, b, cycle_id, _ = await _setup_position(store, config)
+
+        a.close_position = AsyncMock(return_value=OrderResult(order_id="close_a", fill_price=50100.0))
+        b.close_position = AsyncMock(return_value=OrderResult(order_id="close_b", fill_price=49900.0))
+        a.get_open_positions = AsyncMock(side_effect=[
+            [FakePosition(symbol="BTC", size=0.001)],
+            [],
+        ])
+        b.get_open_positions = AsyncMock(side_effect=[
+            [FakePosition(symbol="BTC", size=-0.001)],
+            [],
+        ])
+
+        from src.core.execution import close_position
+        await close_position({"ex_a": a, "ex_b": b}, store, config)
+
+        cycle_rows = await store.conn.execute_fetchall("SELECT * FROM cycles WHERE id=?", (cycle_id,))
+        assert cycle_rows[0]["state"] == "CLOSED"
+
+        leg_rows = await store.conn.execute_fetchall(
+            "SELECT exchange_id, side, size, entry_price, close_price FROM position_legs WHERE position_id IN "
+            "(SELECT id FROM positions WHERE cycle_id=?) ORDER BY exchange_id",
+            (cycle_id,),
+        )
+        assert leg_rows[0]["close_price"] == pytest.approx(50100.0)
+        assert leg_rows[1]["close_price"] == pytest.approx(49900.0)
+
+        long_leg = next(l for l in leg_rows if l["side"] == "long")
+        short_leg = next(l for l in leg_rows if l["side"] == "short")
+        expected_long = (50100.0 - long_leg["entry_price"]) * long_leg["size"]
+        expected_short = (short_leg["entry_price"] - 49900.0) * short_leg["size"]
+        assert cycle_rows[0]["long_close_pnl"] == pytest.approx(expected_long)
+        assert cycle_rows[0]["short_close_pnl"] == pytest.approx(expected_short)
+
+        close_orders = await store.conn.execute_fetchall(
+            "SELECT exchange_id, action, fill_price FROM orders WHERE cycle_id=? AND action='CLOSE' ORDER BY exchange_id",
+            (cycle_id,),
+        )
+        assert len(close_orders) == 2
+        assert close_orders[0]["fill_price"] == pytest.approx(50100.0)
+        assert close_orders[1]["fill_price"] == pytest.approx(49900.0)
+
+    async def test_close_when_already_flat_still_completes(self, store, config):
+        a, b, cycle_id, _ = await _setup_position(store, config)
+
+        a.get_open_positions = AsyncMock(return_value=[])
+        b.get_open_positions = AsyncMock(return_value=[])
+
+        from src.core.execution import close_position
+        await close_position({"ex_a": a, "ex_b": b}, store, config)
+
+        cycles = await store.conn.execute_fetchall("SELECT state FROM cycles WHERE id=?", (cycle_id,))
+        assert cycles[0]["state"] == "CLOSED"
+
 
 # ---------------------------------------------------------------------------
 # Size calculation edge cases

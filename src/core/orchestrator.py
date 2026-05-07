@@ -338,8 +338,16 @@ class Orchestrator:
                     long_positions = []
                     short_positions = []
 
-                long_pnl = sum(p.unrealized_pnl for p in long_positions)
-                short_pnl = sum(p.unrealized_pnl for p in short_positions)
+                long_symbol_positions = [
+                    p for p in long_positions
+                    if p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8
+                ]
+                short_symbol_positions = [
+                    p for p in short_positions
+                    if p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8
+                ]
+                long_pnl = sum(p.unrealized_pnl for p in long_symbol_positions)
+                short_pnl = sum(p.unrealized_pnl for p in short_symbol_positions)
 
                 leg_rows = await self.store.conn.execute(
                     "SELECT * FROM position_legs WHERE position_id=?", (pos_id,)
@@ -359,8 +367,8 @@ class Orchestrator:
                 await self.store.conn.commit()
 
                 # Detect broken legs: one side flat, the other not
-                long_still_there = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in long_positions)
-                short_still_there = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in short_positions)
+                long_still_there = bool(long_symbol_positions)
+                short_still_there = bool(short_symbol_positions)
                 if long_still_there != short_still_there:
                     broken_side = long_ex if long_still_there else short_ex
                     flat_side = short_ex if long_still_there else long_ex
@@ -501,7 +509,17 @@ class Orchestrator:
                                 opp.short_leg.exchange_id, opp.net_apr)
                     await open_position(opp, self.adapters, self.store, cfg)
 
-                await asyncio.gather(*[_open_one(opp) for opp in new_positions], return_exceptions=True)
+                open_results = await asyncio.gather(
+                    *[_open_one(opp) for opp in new_positions], return_exceptions=True
+                )
+                for opp, result in zip(new_positions, open_results):
+                    if isinstance(result, Exception):
+                        logger.error("Replacement open failed for %s: %s", opp.symbol, result)
+                        await self.store.append_event(Event(
+                            level="error",
+                            event_type="REPLACEMENT_OPEN_FAILED",
+                            data={"symbol": opp.symbol, "error": str(result)},
+                        ))
 
         # Check final state
         rows3 = await self.store.conn.execute("SELECT id FROM positions WHERE is_active=1")
