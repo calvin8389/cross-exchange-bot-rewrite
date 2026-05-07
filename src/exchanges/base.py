@@ -45,6 +45,10 @@ class MarketDetails:
     market_id: int | str   # int for Lighter, str for EdgeX
     price_tick: float
     size_step: float
+    min_order_size: float = 0.0
+    min_notional: float = 0.0
+    taker_fee_rate: float = 0.0
+    maker_fee_rate: float = 0.0
 
 
 @dataclass

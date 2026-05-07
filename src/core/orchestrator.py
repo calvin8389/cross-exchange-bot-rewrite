@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from src.config import BotConfig
-from src.core.execution import ExecConfig, close_position, open_position
+from src.core.execution import ExecConfig, UnhedgedExposureError, close_position, open_position
 from src.core.models import BotState, Opportunity
 from src.core.scanner import ScanConfig, scan_all
 from src.db.store import Event, Store
@@ -46,6 +46,7 @@ class Orchestrator:
         self._waiting_start: float = 0.0
         self._db_lock = asyncio.Lock()  # serialize SQLite writes
         self._batch: list[Opportunity] = []
+        self._runtime_failures: dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -93,6 +94,20 @@ class Orchestrator:
         # the legacy maintenance-margin-style stop-loss heuristic.
         return (PERCENT_MULTIPLIER / leverage) * STOP_LOSS_BUFFER_RATIO
 
+    async def _note_runtime_failure(self, key: str, event_type: str, data: dict[str, float | str]) -> None:
+        count = self._runtime_failures.get(key, 0) + 1
+        self._runtime_failures[key] = count
+        threshold = max(1, self.bot_config.runtime_failure_alert_threshold)
+        if count >= threshold:
+            await self.store.append_event(Event(
+                level="error",
+                event_type=event_type,
+                data={**data, "consecutive_failures": count},
+            ))
+
+    def _clear_runtime_failure(self, key: str) -> None:
+        self._runtime_failures.pop(key, None)
+
     # ------------------------------------------------------------------
     # Recovery
     # ------------------------------------------------------------------
@@ -108,6 +123,7 @@ class Orchestrator:
         logger.info("Recovery: found %d active position(s)", len(active))
 
         all_ok = True
+        fatal_recovery_issue = False
         for pos in active:
             exchange_long_id = pos["exchange_long"]
             exchange_short_id = pos["exchange_short"]
@@ -117,9 +133,14 @@ class Orchestrator:
             if not long_adapter or not short_adapter:
                 logger.error("Recovery: adapters missing for %s/%s - clearing position %d",
                              exchange_long_id, exchange_short_id, pos["id"])
-                await self.store.conn.execute("UPDATE positions SET is_active=0 WHERE id=?", (pos["id"],))
-                await self.store.conn.commit()
+                await self.store.append_event(Event(
+                    level="error",
+                    event_type="RECOVERY_ADAPTER_MISSING",
+                    position_id=pos["id"],
+                    data={"symbol": symbol, "long_exchange": exchange_long_id, "short_exchange": exchange_short_id},
+                ))
                 all_ok = False
+                fatal_recovery_issue = True
                 continue
 
             try:
@@ -128,6 +149,13 @@ class Orchestrator:
             except Exception as e:
                 logger.error("Recovery: fetch failed for %s: %s", symbol, e)
                 all_ok = False
+                fatal_recovery_issue = True
+                await self.store.append_event(Event(
+                    level="error",
+                    event_type="RECOVERY_POSITION_QUERY_FAILED",
+                    position_id=pos["id"],
+                    data={"symbol": symbol, "error": str(e)},
+                ))
                 continue
 
             long_match = any(p.symbol.upper() == symbol.upper() and abs(p.size) > MIN_POSITION_SIZE for p in long_positions)
@@ -150,17 +178,17 @@ class Orchestrator:
                           "long_match": long_match, "short_match": short_match},
                 ))
                 all_ok = False
+                fatal_recovery_issue = True
 
         if all_ok and active:
             self.state = BotState.HOLDING
             await self.store.kv_set("state", "HOLDING")
+        elif fatal_recovery_issue:
+            self.state = BotState.ERROR
+            await self.store.kv_set("state", "ERROR")
         elif not all_ok:
-            still_active = await self.store.conn.execute_fetchall("SELECT id FROM positions WHERE is_active=1")
-            if still_active:
-                self.state = BotState.HOLDING
-                await self.store.kv_set("state", "HOLDING")
-            else:
-                self.state = BotState.IDLE
+            self.state = BotState.IDLE
+            await self.store.kv_set("state", "IDLE")
 
     # ------------------------------------------------------------------
     # Main loop
@@ -224,7 +252,13 @@ class Orchestrator:
 
         if any_open:
             logger.error("IDLE: found unexpected open positions - entering ERROR")
+            await self.store.append_event(Event(
+                level="error",
+                event_type="UNEXPECTED_OPEN_POSITION",
+                data={"message": "Unexpected residual position detected during IDLE preflight"},
+            ))
             self.state = BotState.ERROR
+            await self.store.kv_set("state", "ERROR")
             return
 
         self.state = BotState.ANALYZING
@@ -238,6 +272,10 @@ class Orchestrator:
             min_net_apr_threshold=threshold,
             max_spread_pct=self.bot_config.max_spread_pct,
             min_volume_usd=self.bot_config.min_volume_usd,
+            hold_duration_hours=self.bot_config.hold_duration_hours,
+            estimated_taker_fee_bps=self.bot_config.estimated_taker_fee_bps,
+            estimated_slippage_bps=self.bot_config.estimated_slippage_bps,
+            estimated_impact_bps=self.bot_config.estimated_impact_bps,
         )
 
         try:
@@ -304,6 +342,10 @@ class Orchestrator:
                 leverage=self.bot_config.leverage,
                 cross_pct=self.bot_config.cross_pct,
                 notional_override=notional,
+                max_symbol_exposure_usd=self.bot_config.max_symbol_exposure_usd,
+                max_exchange_exposure_usd=self.bot_config.max_exchange_exposure_usd,
+                max_total_exposure_usd=self.bot_config.max_total_exposure_usd,
+                max_total_drawdown_usd=self.bot_config.max_total_drawdown_usd,
             )
             logger.info("  Opening %s ($%.0f) pair=%s/%s net_apr=%.2f%%",
                         opp.symbol, notional, opp.long_leg.exchange_id,
@@ -343,8 +385,12 @@ class Orchestrator:
                         logger.info("  Rolled back %s %s %.4f", ex_id, actual_side, abs(target.size))
                     except Exception as e2:
                         logger.error("  Rollback %s/%s failed: %s", sym, ex_id, e2)
-            self.state = BotState.IDLE
-            await self.store.kv_set("state", "IDLE")
+            if any(isinstance(err, UnhedgedExposureError) for _, err in failures):
+                self.state = BotState.ERROR
+                await self.store.kv_set("state", "ERROR")
+            else:
+                self.state = BotState.IDLE
+                await self.store.kv_set("state", "IDLE")
             return
 
         self.state = BotState.HOLDING
@@ -383,13 +429,14 @@ class Orchestrator:
             short_adapter = self.adapters.get(short_ex)
             legs = []
 
-            async def _close_current_position(event_type: str, data: dict[str, float | str]) -> bool:
+            async def _close_current_position(event_type: str, close_reason: str, data: dict[str, float | str]) -> bool:
                 try:
                     await close_position(
                         self.adapters,
                         self.store,
                         ExecConfig(cross_pct=self.bot_config.cross_pct),
                         position_id=pos_id,
+                        close_reason=close_reason,
                     )
                     closed_ids.append(pos_id)
                     await self.store.append_event(Event(
@@ -401,6 +448,8 @@ class Orchestrator:
                     return True
                 except Exception as e:
                     logger.error("Close %s position %d failed: %s", symbol, pos_id, e)
+                    self.state = BotState.ERROR
+                    await self.store.kv_set("state", "ERROR")
                     return False
 
             # Update PnL
@@ -408,7 +457,13 @@ class Orchestrator:
                 try:
                     long_positions = await long_adapter.get_open_positions()
                     short_positions = await short_adapter.get_open_positions()
+                    self._clear_runtime_failure(f"POSITION_QUERY_FAILED:{symbol}")
                 except Exception:
+                    await self._note_runtime_failure(
+                        key=f"POSITION_QUERY_FAILED:{symbol}",
+                        event_type="POSITION_QUERY_FAILED",
+                        data={"symbol": symbol},
+                    )
                     long_positions = []
                     short_positions = []
 
@@ -473,6 +528,7 @@ class Orchestrator:
                         )
                         closed = await _close_current_position(
                             "CLOSE_STOP_LOSS",
+                            "STOP_LOSS",
                             {
                                 "symbol": symbol,
                                 "loss_pct": loss_pct,
@@ -493,6 +549,7 @@ class Orchestrator:
                     )
                     closed = await _close_current_position(
                         "CLOSE_MAX_HOLD",
+                        "MAX_HOLD",
                         {
                             "symbol": symbol,
                             "held_hours": held_hours,
@@ -516,8 +573,14 @@ class Orchestrator:
                     long_adapter.get_funding_rate(long_md.market_id),
                     short_adapter.get_funding_rate(short_md.market_id),
                 )
+                self._clear_runtime_failure(f"FUNDING_REFRESH_FAILED:{symbol}")
             except Exception as e:
                 logger.warning("HOLDING: re-fetch funding for %s failed: %s - keeping open", symbol, e)
+                await self._note_runtime_failure(
+                    key=f"FUNDING_REFRESH_FAILED:{symbol}",
+                    event_type="FUNDING_REFRESH_FAILED",
+                    data={"symbol": symbol, "error": str(e)},
+                )
                 still_open += 1
                 continue
 
@@ -551,13 +614,18 @@ class Orchestrator:
                             symbol=symbol, market_id=None,
                             since_ts=since, until_ts=now_iso,
                         )
+                        self._clear_runtime_failure(f"FUNDING_HISTORY_FAILED:{symbol}:{ex_id}")
                         for p in payments:
                             await self.store.conn.execute(
                                 "INSERT OR IGNORE INTO funding_payments(position_id, exchange_id, ts, amount, rate) VALUES(?,?,?,?,?)",
                                 (pos_id, ex_id, p.ts, p.amount, p.rate),
                             )
-                    except Exception:
-                        pass  # funding history is best-effort
+                    except Exception as e:
+                        await self._note_runtime_failure(
+                            key=f"FUNDING_HISTORY_FAILED:{symbol}:{ex_id}",
+                            event_type="FUNDING_HISTORY_FAILED",
+                            data={"symbol": symbol, "exchange_id": ex_id, "error": str(e)},
+                        )
                 await self.store.conn.commit()
 
                 if current_net_apr < threshold:
@@ -565,6 +633,7 @@ class Orchestrator:
                                 symbol, current_net_apr, threshold, pos_id)
                     closed = await _close_current_position(
                         "CLOSE_APR_DROP",
+                        "APR_DROP",
                         {"symbol": symbol, "net_apr": current_net_apr, "threshold": threshold},
                     )
                     if not closed:
@@ -589,6 +658,10 @@ class Orchestrator:
                 min_net_apr_threshold=threshold,
                 max_spread_pct=self.bot_config.max_spread_pct,
                 min_volume_usd=self.bot_config.min_volume_usd,
+                hold_duration_hours=self.bot_config.hold_duration_hours,
+                estimated_taker_fee_bps=self.bot_config.estimated_taker_fee_bps,
+                estimated_slippage_bps=self.bot_config.estimated_slippage_bps,
+                estimated_impact_bps=self.bot_config.estimated_impact_bps,
             )
             candidates = await scan_all(self.adapters, scan_config)
 
@@ -617,9 +690,13 @@ class Orchestrator:
 
                 async def _open_one(opp):
                     notional = self._get_notional(opp.symbol)
-                    cfg = ExecConfig(leverage=self.bot_config.leverage,
-                                     cross_pct=self.bot_config.cross_pct,
-                                     notional_override=notional)
+                     cfg = ExecConfig(leverage=self.bot_config.leverage,
+                                      cross_pct=self.bot_config.cross_pct,
+                                     notional_override=notional,
+                                     max_symbol_exposure_usd=self.bot_config.max_symbol_exposure_usd,
+                                     max_exchange_exposure_usd=self.bot_config.max_exchange_exposure_usd,
+                                     max_total_exposure_usd=self.bot_config.max_total_exposure_usd,
+                                     max_total_drawdown_usd=self.bot_config.max_total_drawdown_usd)
                     logger.info("  Opening %s ($%.0f) pair=%s/%s net_apr=%.2f%%",
                                 opp.symbol, notional, opp.long_leg.exchange_id,
                                 opp.short_leg.exchange_id, opp.net_apr)
@@ -663,7 +740,7 @@ class Orchestrator:
 
         success_count = 0
         tasks = [
-            close_position(self.adapters, self.store, exec_config, position_id=pos["id"])
+            close_position(self.adapters, self.store, exec_config, position_id=pos["id"], close_reason="MANUAL")
             for pos in active
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)

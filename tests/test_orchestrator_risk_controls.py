@@ -87,6 +87,31 @@ async def _mark_position_closed(store, position_id: int):
 
 
 class TestHoldingRiskControls:
+    async def test_recovery_unhedged_enters_error(self, store):
+        opened_at = "2025-01-01T00:00:00Z"
+        await _insert_active_position(store, symbol="BTC", opened_at=opened_at)
+
+        long_adapter = MagicMock(exchange_id="lighter")
+        short_adapter = MagicMock(exchange_id="grvt")
+        long_adapter.get_open_positions = AsyncMock(
+            return_value=[FakePosition(symbol="BTC", size=1.0, entry_price=100.0, unrealized_pnl=0.0)]
+        )
+        short_adapter.get_open_positions = AsyncMock(return_value=[])
+
+        orch = Orchestrator(
+            adapters={"lighter": long_adapter, "grvt": short_adapter},
+            bot_config=BotConfig(symbols_to_monitor=["BTC"]),
+            store=store,
+        )
+
+        await orch.recover()
+
+        assert orch.state == BotState.ERROR
+        event_rows = await store.conn.execute_fetchall(
+            "SELECT event_type FROM events WHERE event_type='RECOVERY_UNHEDGED'"
+        )
+        assert len(event_rows) == 1
+
     async def test_holding_closes_when_max_hold_exceeded(self, store):
         _, position_id = await _insert_active_position(
             store,
@@ -157,3 +182,47 @@ class TestHoldingRiskControls:
         payload = json.loads(event_rows[0]["data_json"])
         assert payload["threshold_pct"] == 7.0
         assert payload["loss_pct"] == 9.0
+
+    async def test_holding_emits_funding_history_failure_alert(self, store):
+        await _insert_active_position(
+            store,
+            symbol="SOL",
+            opened_at="2025-01-01T00:00:00Z",
+            entry_price=100.0,
+            size=1.0,
+        )
+        long_adapter = MagicMock(exchange_id="lighter")
+        short_adapter = MagicMock(exchange_id="grvt")
+        long_adapter.get_open_positions = AsyncMock(
+            return_value=[FakePosition(symbol="SOL", size=1.0, entry_price=100.0, unrealized_pnl=0.0)]
+        )
+        short_adapter.get_open_positions = AsyncMock(
+            return_value=[FakePosition(symbol="SOL", size=-1.0, entry_price=100.0, unrealized_pnl=0.0)]
+        )
+        long_adapter.get_market_details = AsyncMock(return_value=MagicMock(market_id="lighter_SOL"))
+        short_adapter.get_market_details = AsyncMock(return_value=MagicMock(market_id="grvt_SOL"))
+        long_adapter.get_funding_rate = AsyncMock(return_value=MagicMock(rate=0.0001, apr=12.0))
+        short_adapter.get_funding_rate = AsyncMock(return_value=MagicMock(rate=-0.0001, apr=-1.0))
+        long_adapter.get_funding_history = AsyncMock(side_effect=RuntimeError("lighter boom"))
+        short_adapter.get_funding_history = AsyncMock(side_effect=RuntimeError("grvt boom"))
+
+        config = BotConfig(
+            symbols_to_monitor=["SOL"],
+            hold_duration_hours=48.0,
+            enable_stop_loss=False,
+            check_interval_seconds=0,
+            runtime_failure_alert_threshold=1,
+        )
+        orch = Orchestrator(
+            adapters={"lighter": long_adapter, "grvt": short_adapter},
+            bot_config=config,
+            store=store,
+        )
+        orch.state = BotState.HOLDING
+
+        await orch._do_holding()
+
+        event_rows = await store.conn.execute_fetchall(
+            "SELECT event_type FROM events WHERE event_type='FUNDING_HISTORY_FAILED' ORDER BY id"
+        )
+        assert len(event_rows) == 2

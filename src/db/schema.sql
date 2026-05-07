@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS cycles (
   short_close_pnl REAL DEFAULT 0.0,
   long_funding_pnl REAL DEFAULT 0.0,
   short_funding_pnl REAL DEFAULT 0.0,
+  close_reason TEXT,
   leverage INTEGER,
   opened_at TEXT,
   closed_at TEXT,

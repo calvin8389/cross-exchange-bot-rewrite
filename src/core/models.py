@@ -40,6 +40,8 @@ class Opportunity:
     net_apr: float = 0.0
     spread_pct: float = 0.0
     volume: float = 0.0
+    gross_apr: float = 0.0
+    estimated_cost_apr: float = 0.0
 
     @property
     def direction(self) -> str:

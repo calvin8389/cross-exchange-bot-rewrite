@@ -52,6 +52,17 @@ class BotConfig:
     max_concurrent_positions: int = 5
     position_tiers: dict[str, float] = field(default_factory=lambda: {"large": 500.0, "medium": 200.0, "small": 100.0})
     symbol_tiers: dict[str, str] = field(default_factory=dict)
+    # Net APR cost model (per order leg, in bps)
+    estimated_taker_fee_bps: float = 4.0
+    estimated_slippage_bps: float = 2.0
+    estimated_impact_bps: float = 1.0
+    # Portfolio risk limits (0 = disabled)
+    max_symbol_exposure_usd: float = 0.0
+    max_exchange_exposure_usd: float = 0.0
+    max_total_exposure_usd: float = 0.0
+    max_total_drawdown_usd: float = 0.0
+    # Runtime alert thresholds
+    runtime_failure_alert_threshold: int = 3
 
 
 def load_env() -> Env:
@@ -117,4 +128,12 @@ def load_bot_config(path: str = "bot_config.json") -> BotConfig:
         max_concurrent_positions=raw.get("max_concurrent_positions", 5),
         position_tiers=raw.get("position_tiers", {"large": 500.0, "medium": 200.0, "small": 100.0}),
         symbol_tiers=raw.get("symbol_tiers", {}),
+        estimated_taker_fee_bps=raw.get("estimated_taker_fee_bps", 4.0),
+        estimated_slippage_bps=raw.get("estimated_slippage_bps", 2.0),
+        estimated_impact_bps=raw.get("estimated_impact_bps", 1.0),
+        max_symbol_exposure_usd=raw.get("max_symbol_exposure_usd", 0.0),
+        max_exchange_exposure_usd=raw.get("max_exchange_exposure_usd", 0.0),
+        max_total_exposure_usd=raw.get("max_total_exposure_usd", 0.0),
+        max_total_drawdown_usd=raw.get("max_total_drawdown_usd", 0.0),
+        runtime_failure_alert_threshold=raw.get("runtime_failure_alert_threshold", 3),
     )

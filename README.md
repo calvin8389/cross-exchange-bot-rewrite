@@ -44,6 +44,13 @@ Only exchanges listed in `ACTIVE_EXCHANGES` are loaded. Missing env vars for an 
   "max_spread_pct": 0.20,
   "max_concurrent_positions": 5,
   "leverage": 3,
+  "estimated_taker_fee_bps": 4.0,
+  "estimated_slippage_bps": 2.0,
+  "estimated_impact_bps": 1.0,
+  "max_symbol_exposure_usd": 1000.0,
+  "max_exchange_exposure_usd": 2000.0,
+  "max_total_exposure_usd": 4000.0,
+  "max_total_drawdown_usd": 300.0,
 
   "position_tiers": {
     "large": 500.0,
@@ -58,6 +65,20 @@ Only exchanges listed in `ACTIVE_EXCHANGES` are loaded. Missing env vars for an 
   }
 }
 ```
+
+New runtime risk controls:
+
+- scanner deducts configured fee/slippage/impact costs before comparing net APR to the open threshold
+- opening prechecks reject orders that miss exchange min size/min notional requirements
+- opening enforces symbol / exchange / total exposure caps plus portfolio drawdown guardrails
+- startup performs read-only health checks for balances, open positions, market metadata, and `close_all.sh`
+- recovery now escalates unhedged restart states into `ERROR` instead of silently resuming
+
+## Runbooks
+
+- `docs/资金费率套利实盘风控清单.md`
+- `docs/异常场景处置手册.md`
+- `docs/此工程机 P0_P1_P2 开发排期版计划.md`
 
 ## How It Works
 

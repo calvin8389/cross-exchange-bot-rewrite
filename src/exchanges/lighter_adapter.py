@@ -223,7 +223,15 @@ class LighterAdapter(ExchangeAdapter):
                     market_id = ob["market_id"]
                     price_tick = 10 ** -ob.get("supported_price_decimals", 2)
                     size_step = 10 ** -ob.get("supported_size_decimals", 2)
-                    cache[sym] = MarketDetails(market_id=market_id, price_tick=price_tick, size_step=size_step)
+                    cache[sym] = MarketDetails(
+                        market_id=market_id,
+                        price_tick=price_tick,
+                        size_step=size_step,
+                        min_order_size=float(ob.get("min_base_amount", size_step) or size_step),
+                        min_notional=float(ob.get("min_quote_amount", 0.0) or 0.0),
+                        taker_fee_rate=float(ob.get("taker_fee", 0.0) or 0.0),
+                        maker_fee_rate=float(ob.get("maker_fee", 0.0) or 0.0),
+                    )
 
                 self._market_cache = (_time.monotonic(), cache)
 

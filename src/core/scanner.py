@@ -18,6 +18,22 @@ class ScanConfig:
     max_spread_pct: float = 0.15
     min_net_apr_threshold: float = 5.0
     symbols: list[str] = field(default_factory=list)
+    hold_duration_hours: float = 8.0
+    estimated_taker_fee_bps: float = 4.0
+    estimated_slippage_bps: float = 2.0
+    estimated_impact_bps: float = 1.0
+
+
+def _estimate_cost_apr(config: ScanConfig) -> float:
+    hold_hours = max(config.hold_duration_hours, 1.0)
+    round_trip_cost_pct = (
+        (config.estimated_taker_fee_bps + config.estimated_slippage_bps + config.estimated_impact_bps)
+        * 4
+        / 10_000
+        * 100
+    )
+    annualization = (24 * 365) / hold_hours
+    return round_trip_cost_pct * annualization
 
 
 async def scan_all(
@@ -54,8 +70,9 @@ async def scan_all(
             if spread_pct > config.max_spread_pct:
                 continue
 
-            # Net APR
-            net_apr = abs(leg_a.apr - leg_b.apr)
+            gross_apr = abs(leg_a.apr - leg_b.apr)
+            estimated_cost_apr = _estimate_cost_apr(config)
+            net_apr = gross_apr - estimated_cost_apr
             if net_apr < config.min_net_apr_threshold:
                 continue
 
@@ -84,6 +101,8 @@ async def scan_all(
                 long_leg=long_leg,
                 short_leg=short_leg,
                 net_apr=net_apr,
+                gross_apr=gross_apr,
+                estimated_cost_apr=estimated_cost_apr,
                 spread_pct=spread_pct,
             ))
 
@@ -135,6 +154,12 @@ async def _fetch_exchange_data(
         return None
 
     if fr is None or bba is None:
+        return None
+    if md.market_id in ("", None) or md.price_tick <= 0 or md.size_step <= 0:
+        logger.warning("%s market_details invalid for %s", exchange_id, symbol)
+        return None
+    if bba.bid <= 0 or bba.ask <= 0 or bba.ask < bba.bid:
+        logger.warning("%s best_bid_ask invalid for %s", exchange_id, symbol)
         return None
 
     leg = ExchangeLeg(

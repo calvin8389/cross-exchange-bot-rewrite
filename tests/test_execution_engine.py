@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -42,10 +43,14 @@ def _mock_adapter(name: str):
         available = 1000.0
 
     class FakeMarket:
-        def __init__(self, mid, tick, step):
+        def __init__(self, mid, tick, step, min_order_size=None, min_notional=0.0):
             self.market_id = mid
             self.price_tick = tick
             self.size_step = step
+            self.min_order_size = min_order_size if min_order_size is not None else step
+            self.min_notional = min_notional
+            self.taker_fee_rate = 0.0
+            self.maker_fee_rate = 0.0
 
     class FakeBBA:
         bid = 50000.0
@@ -328,3 +333,54 @@ class TestSizingInExecution:
         size = call_args[1]["size_base"]
         expected = 200.0 / 50000.5
         assert size == pytest.approx(0.004, rel=0.05), f"size={size}, expected≈{expected}"
+
+    async def test_rejects_below_min_notional(self, store, config):
+        a = _mock_adapter("ex_a")
+        b = _mock_adapter("ex_b")
+        a.get_market_details = AsyncMock(return_value=type("M", (), {
+            "market_id": "ex_a_BTC", "price_tick": 0.1, "size_step": 0.001,
+            "min_order_size": 0.001, "min_notional": 500.0,
+            "taker_fee_rate": 0.0, "maker_fee_rate": 0.0,
+        })())
+        b.get_market_details = AsyncMock(return_value=type("M", (), {
+            "market_id": "ex_b_BTC", "price_tick": 0.1, "size_step": 0.001,
+            "min_order_size": 0.001, "min_notional": 500.0,
+            "taker_fee_rate": 0.0, "maker_fee_rate": 0.0,
+        })())
+        config.notional_override = 100.0
+
+        from src.core.execution import open_position
+        with pytest.raises(ValueError, match="min_notional"):
+            await open_position(_make_opp(), {"ex_a": a, "ex_b": b}, store, config)
+
+    async def test_rejects_when_total_exposure_limit_exceeded(self, store, config):
+        a = _mock_adapter("ex_a")
+        b = _mock_adapter("ex_b")
+        config.max_total_exposure_usd = 50.0
+
+        from src.core.execution import open_position
+        with pytest.raises(ValueError, match="Total exposure"):
+            await open_position(_make_opp(), {"ex_a": a, "ex_b": b}, store, config)
+
+    async def test_close_failure_records_residual_positions_and_reason(self, store, config):
+        a, b, cycle_id, _ = await _setup_position(store, config)
+        pos_open = [FakePosition(symbol="BTC", size=0.001, entry=50000.0, pnl=-1.0)]
+        a.get_open_positions = AsyncMock(return_value=pos_open)
+        b.get_open_positions = AsyncMock(return_value=[FakePosition(symbol="BTC", size=-0.001, entry=50000.0, pnl=1.0)])
+
+        from src.core.execution import close_position
+        with pytest.raises(RuntimeError, match="ESCALATE"):
+            await close_position({"ex_a": a, "ex_b": b}, store, config, close_reason="STOP_LOSS")
+
+        cycle_rows = await store.conn.execute_fetchall("SELECT state, close_reason FROM cycles WHERE id=?", (cycle_id,))
+        assert cycle_rows[0]["state"] == "ERROR"
+        assert cycle_rows[0]["close_reason"] == "STOP_LOSS"
+
+        event_rows = await store.conn.execute_fetchall(
+            "SELECT data_json FROM events WHERE cycle_id=? AND event_type='CLOSING_FAILED'",
+            (cycle_id,),
+        )
+        assert len(event_rows) == 1
+        payload = json.loads(event_rows[0]["data_json"])
+        assert payload["close_reason"] == "STOP_LOSS"
+        assert len(payload["residual_positions"]) == 2

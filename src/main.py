@@ -77,6 +77,7 @@ async def main() -> None:
         adapters = _build_adapters(env)
         if len(adapters) < 2:
             raise RuntimeError(f"Need at least 2 active exchanges, got {len(adapters)}")
+        await _run_startup_health_checks(store, adapters, bot_config)
 
         logger.info("Starting orchestrator with %d exchanges: %s",
                     len(adapters), list(adapters.keys()))
@@ -105,6 +106,56 @@ async def main() -> None:
         if orch:
             await orch.stop()
         await store.close()
+
+
+async def _run_startup_health_checks(
+    store: Store,
+    adapters: dict[str, ExchangeAdapter],
+    bot_config,
+) -> None:
+    close_script = Path("close_all.sh")
+    if not close_script.exists():
+        await store.append_event(Event(
+            level="error",
+            event_type="STARTUP_HEALTHCHECK_FAILED",
+            data={"reason": "close_all.sh missing"},
+        ))
+        raise RuntimeError("Startup health check failed: close_all.sh missing")
+
+    exchanges_checked: list[str] = []
+    symbols_checked: dict[str, int] = {}
+    for exchange_id, adapter in adapters.items():
+        try:
+            balance = await adapter.get_balance()
+            await adapter.get_open_positions()
+            for symbol in bot_config.symbols_to_monitor:
+                await adapter.get_market_details(symbol)
+            exchanges_checked.append(exchange_id)
+            symbols_checked[exchange_id] = len(bot_config.symbols_to_monitor)
+            logger.info(
+                "Startup health check OK: %s available=%.4f total=%.4f symbols=%d",
+                exchange_id,
+                balance.available,
+                balance.total_equity,
+                len(bot_config.symbols_to_monitor),
+            )
+        except Exception as exc:
+            await store.append_event(Event(
+                level="error",
+                event_type="STARTUP_HEALTHCHECK_FAILED",
+                data={"exchange_id": exchange_id, "error": str(exc)},
+            ))
+            raise RuntimeError(f"Startup health check failed on {exchange_id}: {exc}") from exc
+
+    await store.append_event(Event(
+        level="info",
+        event_type="STARTUP_HEALTHCHECK_PASSED",
+        data={
+            "exchanges": exchanges_checked,
+            "symbols_checked": symbols_checked,
+            "close_all_script": str(close_script),
+        },
+    ))
 
 
 async def _run_demo(store: Store) -> None:

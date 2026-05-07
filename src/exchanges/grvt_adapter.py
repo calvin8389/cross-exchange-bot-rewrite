@@ -202,6 +202,12 @@ class GrvtAdapter(ExchangeAdapter):
                 market_id=instrument,
                 price_tick=tick_size,
                 size_step=min_size,
+                min_order_size=float(m.get("min_size", min_size) or min_size),
+                min_notional=float(
+                    m.get("min_quote_amount", m.get("quote_min_amount", 0.0)) or 0.0
+                ),
+                taker_fee_rate=float(m.get("taker_fee", 0.0) or 0.0),
+                maker_fee_rate=float(m.get("maker_fee", 0.0) or 0.0),
             )
         return await asyncio.to_thread(_sync)
 

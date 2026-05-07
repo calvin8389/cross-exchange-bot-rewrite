@@ -196,6 +196,7 @@ class HyperliquidAdapter(ExchangeAdapter):
                         market_id=coin,
                         price_tick=price_tick,
                         size_step=size_step,
+                        min_order_size=size_step,
                     )
             raise ValueError(f"Symbol {symbol} not found on Hyperliquid")
         return await asyncio.to_thread(_sync)

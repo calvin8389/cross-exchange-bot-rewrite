@@ -31,6 +31,14 @@
   "min_volume_usd": 250000000,
   "max_spread_pct": 0.15,
   "cross_pct": 3.0,
+  "estimated_taker_fee_bps": 4.0,
+  "estimated_slippage_bps": 2.0,
+  "estimated_impact_bps": 1.0,
+  "max_symbol_exposure_usd": 1000.0,
+  "max_exchange_exposure_usd": 2000.0,
+  "max_total_exposure_usd": 4000.0,
+  "max_total_drawdown_usd": 300.0,
+  "runtime_failure_alert_threshold": 3,
 
   "enable_stop_loss": true
 }

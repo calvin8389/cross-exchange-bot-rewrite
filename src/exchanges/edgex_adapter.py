@@ -242,10 +242,23 @@ class EdgeXAdapter(ExchangeAdapter):
             if c.get("contractId") == contract_id:
                 price_tick = float(c.get("tickSize", 0.01) or 0.01)
                 size_step = float(c.get("stepSize", 0.001) or 0.001)
-                return MarketDetails(market_id=contract_id, price_tick=price_tick, size_step=size_step)
+                return MarketDetails(
+                    market_id=contract_id,
+                    price_tick=price_tick,
+                    size_step=size_step,
+                    min_order_size=float(c.get("minOrderSize", c.get("minTradeSize", size_step)) or size_step),
+                    min_notional=float(c.get("minQuoteAmount", 0.0) or 0.0),
+                    taker_fee_rate=float(c.get("takerFeeRate", c.get("takerFee", 0.0)) or 0.0),
+                    maker_fee_rate=float(c.get("makerFeeRate", c.get("makerFee", 0.0)) or 0.0),
+                )
 
         # Fallback
-        return MarketDetails(market_id=contract_id, price_tick=0.01, size_step=0.001)
+        return MarketDetails(
+            market_id=contract_id,
+            price_tick=0.01,
+            size_step=0.001,
+            min_order_size=0.001,
+        )
 
     # ------------------------------------------------------------------
     # Order placement (requires edgex-python-sdk)
