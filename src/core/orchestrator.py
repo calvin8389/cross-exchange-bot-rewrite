@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from src.config import BotConfig
@@ -65,6 +66,19 @@ class Orchestrator:
         amounts = self.bot_config.position_tiers
         tier = tiers.get(symbol.upper(), "medium")
         return amounts.get(tier, self.bot_config.notional_per_position)
+
+    def _position_age_hours(self, opened_at: str | None) -> float:
+        if not opened_at:
+            return 0.0
+        try:
+            opened_dt = datetime.fromisoformat(opened_at.replace("Z", "+00:00"))
+        except ValueError:
+            return 0.0
+        return max(0.0, (datetime.now(timezone.utc) - opened_dt).total_seconds() / 3600)
+
+    def _stop_loss_threshold_pct(self) -> float:
+        leverage = max(1, self.bot_config.leverage)
+        return (100.0 / leverage) * 0.7
 
     # ------------------------------------------------------------------
     # Recovery
@@ -328,6 +342,27 @@ class Orchestrator:
 
             long_adapter = self.adapters.get(long_ex)
             short_adapter = self.adapters.get(short_ex)
+            legs = []
+
+            async def _close_current_position(event_type: str, data: dict[str, float | str]) -> bool:
+                try:
+                    await close_position(
+                        self.adapters,
+                        self.store,
+                        ExecConfig(cross_pct=self.bot_config.cross_pct),
+                        position_id=pos_id,
+                    )
+                    closed_ids.append(pos_id)
+                    await self.store.append_event(Event(
+                        level="info",
+                        event_type=event_type,
+                        position_id=pos_id,
+                        data=data,
+                    ))
+                    return True
+                except Exception as e:
+                    logger.error("Close %s position %d failed: %s", symbol, pos_id, e)
+                    return False
 
             # Update PnL
             if long_adapter and short_adapter:
@@ -381,6 +416,55 @@ class Orchestrator:
                     self.state = BotState.ERROR
                     await self.store.kv_set("state", "ERROR")
                     return
+
+                avg_leg_notional = 0.0
+                if legs:
+                    leg_notionals = [abs(leg["size"] * leg["entry_price"]) for leg in legs]
+                    if leg_notionals:
+                        avg_leg_notional = sum(leg_notionals) / len(leg_notionals)
+
+                total_unrealized_pnl = long_pnl + short_pnl
+                if self.bot_config.enable_stop_loss and avg_leg_notional > 0:
+                    stop_loss_pct = self._stop_loss_threshold_pct()
+                    loss_pct = max(0.0, (-total_unrealized_pnl / avg_leg_notional) * 100.0)
+                    if loss_pct >= stop_loss_pct:
+                        logger.warning(
+                            "STOP LOSS %s: loss_pct=%.2f%% threshold=%.2f%% pnl=%.4f",
+                            symbol, loss_pct, stop_loss_pct, total_unrealized_pnl,
+                        )
+                        closed = await _close_current_position(
+                            "CLOSE_STOP_LOSS",
+                            {
+                                "symbol": symbol,
+                                "loss_pct": loss_pct,
+                                "threshold_pct": stop_loss_pct,
+                                "unrealized_pnl": total_unrealized_pnl,
+                            },
+                        )
+                        if closed:
+                            continue
+                        still_open += 1
+                        continue
+
+                max_hold_hours = self.bot_config.hold_duration_hours
+                held_hours = self._position_age_hours(pos["opened_at"])
+                if max_hold_hours > 0 and held_hours >= max_hold_hours:
+                    logger.info(
+                        "MAX HOLD %s: held %.2fh >= %.2fh - closing position %d",
+                        symbol, held_hours, max_hold_hours, pos_id,
+                    )
+                    closed = await _close_current_position(
+                        "CLOSE_MAX_HOLD",
+                        {
+                            "symbol": symbol,
+                            "held_hours": held_hours,
+                            "max_hold_hours": max_hold_hours,
+                        },
+                    )
+                    if closed:
+                        continue
+                    still_open += 1
+                    continue
 
             # Re-check funding rate spread for this position
             if not long_adapter or not short_adapter:
@@ -441,17 +525,11 @@ class Orchestrator:
                 if current_net_apr < threshold:
                     logger.info("  >> %s net_apr %.2f%% < %.0f%% - closing position %d",
                                 symbol, current_net_apr, threshold, pos_id)
-                    try:
-                        await close_position(self.adapters, self.store,
-                                             ExecConfig(cross_pct=self.bot_config.cross_pct),
-                                             position_id=pos_id)
-                        closed_ids.append(pos_id)
-                        await self.store.append_event(Event(
-                            level="info", event_type="CLOSE_APR_DROP", position_id=pos_id,
-                            data={"symbol": symbol, "net_apr": current_net_apr, "threshold": threshold},
-                        ))
-                    except Exception as e:
-                        logger.error("Close %s position %d failed: %s", symbol, pos_id, e)
+                    closed = await _close_current_position(
+                        "CLOSE_APR_DROP",
+                        {"symbol": symbol, "net_apr": current_net_apr, "threshold": threshold},
+                    )
+                    if not closed:
                         still_open += 1
                 else:
                     still_open += 1
