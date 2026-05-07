@@ -43,6 +43,7 @@ class Orchestrator:
         self._stop = asyncio.Event()
         self._waiting_start: float = 0.0
         self._db_lock = asyncio.Lock()  # serialize SQLite writes
+        self._broken_leg_count: dict[int, int] = {}  # position_id → consecutive detections
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -394,15 +395,25 @@ class Orchestrator:
                 if long_still_there != short_still_there:
                     broken_side = long_ex if long_still_there else short_ex
                     flat_side = short_ex if long_still_there else long_ex
-                    logger.error("UNHEDGED %s: %s has position, %s is flat - entering ERROR",
-                                 symbol, broken_side, flat_side)
-                    await self.store.append_event(Event(
-                        level="error", event_type="UNHEDGED_POSITION", position_id=pos_id,
-                        data={"symbol": symbol, "broken_side": broken_side, "flat_side": flat_side},
-                    ))
-                    self.state = BotState.ERROR
-                    await self.store.kv_set("state", "ERROR")
-                    return
+                    self._broken_leg_count[pos_id] = self._broken_leg_count.get(pos_id, 0) + 1
+                    count = self._broken_leg_count[pos_id]
+                    logger.warning(
+                        "UNHEDGED %s: %s has position, %s is flat (check %d/3)",
+                        symbol, broken_side, flat_side, count,
+                    )
+                    if count >= 3:
+                        logger.error("UNHEDGED %s confirmed after %d checks - entering ERROR",
+                                     symbol, count)
+                        await self.store.append_event(Event(
+                            level="error", event_type="UNHEDGED_POSITION", position_id=pos_id,
+                            data={"symbol": symbol, "broken_side": broken_side, "flat_side": flat_side},
+                        ))
+                        self.state = BotState.ERROR
+                        await self.store.kv_set("state", "ERROR")
+                        return
+                elif pos_id in self._broken_leg_count:
+                    # Legs rebalanced — reset counter
+                    self._broken_leg_count.pop(pos_id, None)
 
                 # Stop loss check
                 avg_leg_notional = 0.0
