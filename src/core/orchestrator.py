@@ -451,9 +451,8 @@ class Orchestrator:
                                 "unrealized_pnl": total_unrealized_pnl,
                             },
                         )
-                        if closed:
-                            continue
-                        still_open += 1
+                        if not closed:
+                            still_open += 1
                         continue
 
                 max_hold_hours = self.bot_config.hold_duration_hours
