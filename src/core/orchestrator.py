@@ -24,7 +24,9 @@ from src.db.store import Event, Store
 from src.exchanges.base import ExchangeAdapter
 
 logger = logging.getLogger(__name__)
+# Decimal ratio -> percentage conversion helper (e.g. 0.07 -> 7.0).
 PERCENT_MULTIPLIER = 100.0
+# Stop-loss threshold uses 70% of inverse-leverage buffer from legacy heuristic.
 STOP_LOSS_BUFFER_RATIO = 0.7
 MIN_POSITION_SIZE = 1e-8
 
@@ -280,8 +282,8 @@ class Orchestrator:
         await self.store.kv_set("state", "OPENING")
 
     async def _do_opening(self) -> None:
-        batch = list(self._batch)
-        self._batch = []
+        batch = self._batch.copy()
+        self._batch.clear()
         if not batch:
             logger.warning("OPENING: empty batch - returning to ANALYZING")
             await self.store.append_event(Event(
