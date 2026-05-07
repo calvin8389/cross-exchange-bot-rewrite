@@ -11,6 +11,7 @@ import aiohttp
 from src.exchanges.base import Balance, BestBidAsk, ExchangeAdapter, FundingRate, MarketDetails, OrderResult, PositionInfo
 
 logger = logging.getLogger(__name__)
+_CLIENT_ORDER_ID_MAX = 2_147_483_647
 
 
 class LighterAdapter(ExchangeAdapter):
@@ -35,7 +36,7 @@ class LighterAdapter(ExchangeAdapter):
         self._funding_cache: Optional[tuple[float, dict[int, tuple[float, float]]]] = None
         self._market_cache: Optional[tuple[float, dict[str, MarketDetails]]] = None
         self._order_id_lock = asyncio.Lock()
-        self._client_order_seq = int(time.time_ns() % 2_147_483_646) + 1
+        self._client_order_seq = int(time.time_ns() % _CLIENT_ORDER_ID_MAX) or 1
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -57,7 +58,7 @@ class LighterAdapter(ExchangeAdapter):
         """Generate a process-local, monotonic client order ID."""
         async with self._order_id_lock:
             self._client_order_seq += 1
-            if self._client_order_seq >= 2_147_483_647:
+            if self._client_order_seq > _CLIENT_ORDER_ID_MAX:
                 self._client_order_seq = 1
             return self._client_order_seq
 
