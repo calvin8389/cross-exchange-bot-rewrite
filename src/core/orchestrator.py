@@ -343,6 +343,22 @@ class Orchestrator:
                         )
                 await self.store.conn.commit()
 
+                # Detect broken legs: one side flat, the other not
+                long_still_there = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in long_positions)
+                short_still_there = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in short_positions)
+                if long_still_there != short_still_there:
+                    broken_side = long_ex if long_still_there else short_ex
+                    flat_side = short_ex if long_still_there else long_ex
+                    logger.error("UNHEDGED %s: %s has position, %s is flat - entering ERROR",
+                                 symbol, broken_side, flat_side)
+                    await self.store.append_event(Event(
+                        level="error", event_type="UNHEDGED_POSITION", position_id=pos_id,
+                        data={"symbol": symbol, "broken_side": broken_side, "flat_side": flat_side},
+                    ))
+                    self.state = BotState.ERROR
+                    await self.store.kv_set("state", "ERROR")
+                    return
+
             # Re-check funding rate spread for this position
             if not long_adapter or not short_adapter:
                 still_open += 1

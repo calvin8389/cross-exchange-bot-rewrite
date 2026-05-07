@@ -171,6 +171,13 @@ async def _run_demo(store: Store) -> None:
 
 
 if __name__ == "__main__":
+    # Clear stale bytecode cache to avoid running old code
+    import shutil
+    _src_root = Path(__file__).resolve().parent.parent
+    for _pycache in _src_root.rglob("__pycache__"):
+        shutil.rmtree(_pycache, ignore_errors=True)
+    logger.info("Cleared __pycache__ directories")
+
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
