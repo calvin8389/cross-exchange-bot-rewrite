@@ -12,6 +12,7 @@ from src.exchanges.base import Balance, BestBidAsk, ExchangeAdapter, FundingRate
 
 logger = logging.getLogger(__name__)
 _CLIENT_ORDER_ID_MAX = 2_147_483_647
+_PID_MIX_SHIFT_BITS = 16
 
 
 class LighterAdapter(ExchangeAdapter):
@@ -36,7 +37,9 @@ class LighterAdapter(ExchangeAdapter):
         self._funding_cache: Optional[tuple[float, dict[int, tuple[float, float]]]] = None
         self._market_cache: Optional[tuple[float, dict[str, MarketDetails]]] = None
         self._order_id_lock = asyncio.Lock()
-        seed = time.time_ns() ^ (os.getpid() << 16)
+        # Mix coarse process identity into the monotonic seed so restarts in
+        # nearby timestamps are less likely to reuse the same initial sequence.
+        seed = time.time_ns() ^ (os.getpid() << _PID_MIX_SHIFT_BITS)
         self._client_order_seq = int(seed % _CLIENT_ORDER_ID_MAX) or 1
 
     # ------------------------------------------------------------------

@@ -24,6 +24,7 @@ from src.db.store import Event, Store
 from src.exchanges.base import ExchangeAdapter
 
 logger = logging.getLogger(__name__)
+PERCENT_MULTIPLIER = 100.0
 
 
 class Orchestrator:
@@ -71,14 +72,19 @@ class Orchestrator:
         if not opened_at:
             return 0.0
         try:
-            opened_dt = datetime.fromisoformat(opened_at.replace("Z", "+00:00"))
+            if opened_at.endswith("Z"):
+                opened_dt = datetime.fromisoformat(opened_at.removesuffix("Z")).replace(tzinfo=timezone.utc)
+            else:
+                opened_dt = datetime.fromisoformat(opened_at)
+                if opened_dt.tzinfo is None:
+                    opened_dt = opened_dt.replace(tzinfo=timezone.utc)
         except ValueError:
             return 0.0
         return max(0.0, (datetime.now(timezone.utc) - opened_dt).total_seconds() / 3600)
 
     def _stop_loss_threshold_pct(self) -> float:
         leverage = max(1, self.bot_config.leverage)
-        return (100.0 / leverage) * 0.7
+        return (PERCENT_MULTIPLIER / leverage) * 0.7
 
     # ------------------------------------------------------------------
     # Recovery
@@ -426,7 +432,7 @@ class Orchestrator:
                 total_unrealized_pnl = long_pnl + short_pnl
                 if self.bot_config.enable_stop_loss and avg_leg_notional > 0:
                     stop_loss_pct = self._stop_loss_threshold_pct()
-                    loss_pct = max(0.0, (-total_unrealized_pnl / avg_leg_notional) * 100.0)
+                    loss_pct = max(0.0, (-total_unrealized_pnl / avg_leg_notional) * PERCENT_MULTIPLIER)
                     if loss_pct >= stop_loss_pct:
                         logger.warning(
                             "STOP LOSS %s: loss_pct=%.2f%% threshold=%.2f%% pnl=%.4f",

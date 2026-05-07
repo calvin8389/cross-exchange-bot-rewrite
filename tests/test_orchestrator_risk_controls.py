@@ -20,8 +20,8 @@ from src.core.orchestrator import Orchestrator
 async def store():
     from src.db.store import Store
 
-    fd, path = tempfile.mkstemp(suffix=".sqlite")
-    os.close(fd)
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as tmp:
+        path = tmp.name
     s = Store(path)
     await s.start()
     schema = Path(__file__).parent.parent / "src" / "db" / "schema.sql"
