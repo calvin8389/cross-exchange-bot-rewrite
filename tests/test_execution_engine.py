@@ -366,7 +366,9 @@ class TestSizingInExecution:
         a, b, cycle_id, _ = await _setup_position(store, config)
         pos_open = [FakePosition(symbol="BTC", size=0.001, entry=50000.0, pnl=-1.0)]
         a.get_open_positions = AsyncMock(return_value=pos_open)
-        b.get_open_positions = AsyncMock(return_value=[FakePosition(symbol="BTC", size=-0.001, entry=50000.0, pnl=1.0)])
+        b.get_open_positions = AsyncMock(
+            return_value=[FakePosition(symbol="BTC", size=-0.001, entry=50000.0, pnl=1.0)]
+        )
 
         from src.core.execution import close_position
         with pytest.raises(RuntimeError, match="ESCALATE"):
