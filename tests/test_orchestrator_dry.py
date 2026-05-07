@@ -85,6 +85,30 @@ class TestStateTransitions:
         await orch._do_idle()
         assert orch.state == BotState.ERROR
 
+    async def test_idle_ignores_zero_size_positions(self, store):
+        class FakePos:
+            symbol = "BTC"; size = 0.0; entry_price = 80000.0; unrealized_pnl = 0.0
+
+        adapters = {
+            "lighter": MagicMock(exchange_id="lighter", get_open_positions=AsyncMock(return_value=[FakePos()])),
+            "grvt": MagicMock(exchange_id="grvt", get_open_positions=AsyncMock(return_value=[])),
+        }
+        orch = Orchestrator(adapters=adapters, bot_config=_make_config(), store=store)
+        orch.state = BotState.IDLE
+        await orch._do_idle()
+        assert orch.state == BotState.ANALYZING
+
+    async def test_analyzing_scan_failure_stays_analyzing(self, store):
+        adapters = {
+            "lighter": MagicMock(exchange_id="lighter"),
+            "grvt": MagicMock(exchange_id="grvt"),
+        }
+        orch = Orchestrator(adapters=adapters, bot_config=_make_config(), store=store)
+        orch.state = BotState.ANALYZING
+        with patch("src.core.orchestrator.scan_all", new=AsyncMock(side_effect=RuntimeError("scan boom"))):
+            await orch._do_analyzing()
+        assert orch.state == BotState.ANALYZING
+
     async def test_waiting_timeout_goes_to_idle(self, store):
         adapters = {"lighter": MagicMock(exchange_id="lighter"), "grvt": MagicMock(exchange_id="grvt")}
         orch = Orchestrator(adapters=adapters, bot_config=_make_config(), store=store)
@@ -129,6 +153,17 @@ class TestOpeningClosing:
         # Should have placed an order on the long leg
         a.place_order.assert_called()
         assert orch.state == BotState.HOLDING
+
+    async def test_opening_with_empty_batch_returns_to_analyzing(self, store):
+        a = MagicMock(exchange_id="lighter")
+        b = MagicMock(exchange_id="grvt")
+        orch = Orchestrator(adapters={"lighter": a, "grvt": b}, bot_config=_make_config(), store=store)
+        orch.state = BotState.OPENING
+        orch._batch = []
+
+        await orch._do_opening()
+
+        assert orch.state == BotState.ANALYZING
 
     async def test_closing_with_active_positions(self, store):
         """_do_closing should close all active positions."""

@@ -43,6 +43,7 @@ class Orchestrator:
         self._stop = asyncio.Event()
         self._waiting_start: float = 0.0
         self._db_lock = asyncio.Lock()  # serialize SQLite writes
+        self._batch: list[Opportunity] = []
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -208,9 +209,14 @@ class Orchestrator:
             await asyncio.sleep(5)
             return
 
+        if any(isinstance(positions, Exception) for positions in all_positions):
+            logger.warning("IDLE: position check failed on one or more adapters - retrying")
+            await asyncio.sleep(5)
+            return
+
         any_open = False
         for positions in all_positions:
-            if isinstance(positions, list) and positions:
+            if isinstance(positions, list) and any(abs(getattr(p, "size", 0.0)) > MIN_POSITION_SIZE for p in positions):
                 any_open = True
                 break
 
@@ -232,7 +238,17 @@ class Orchestrator:
             min_volume_usd=self.bot_config.min_volume_usd,
         )
 
-        candidates = await scan_all(self.adapters, scan_config)
+        try:
+            candidates = await scan_all(self.adapters, scan_config)
+        except Exception as e:
+            logger.warning("ANALYZING failed: %s", e)
+            await self.store.append_event(Event(
+                level="warning",
+                event_type="SCAN_FAILED",
+                data={"error": str(e)},
+            ))
+            await asyncio.sleep(10)
+            return
         await self.store.append_event(Event(
             level="info", event_type="SCAN_RESULT",
             data={"candidates": [{"symbol": o.symbol, "net_apr": o.net_apr, "spread": o.spread_pct,
@@ -264,7 +280,18 @@ class Orchestrator:
         await self.store.kv_set("state", "OPENING")
 
     async def _do_opening(self) -> None:
-        batch = self._batch
+        batch = list(self._batch)
+        self._batch = []
+        if not batch:
+            logger.warning("OPENING: empty batch - returning to ANALYZING")
+            await self.store.append_event(Event(
+                level="warning",
+                event_type="OPENING_EMPTY_BATCH",
+                data={"message": "OPENING entered with no candidates"},
+            ))
+            self.state = BotState.ANALYZING
+            await self.store.kv_set("state", "ANALYZING")
+            return
         logger.info("=== OPENING %d positions ===", len(batch))
 
         opened: list[tuple[str, str, str]] = []
