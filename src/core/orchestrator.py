@@ -38,6 +38,7 @@ class Orchestrator:
         self.state = BotState.IDLE
         self._stop = asyncio.Event()
         self._waiting_start: float = 0.0
+        self._db_lock = asyncio.Lock()  # serialize SQLite writes
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -254,27 +255,41 @@ class Orchestrator:
             logger.info("  Opening %s ($%.0f) pair=%s/%s net_apr=%.2f%%",
                         opp.symbol, notional, opp.long_leg.exchange_id,
                         opp.short_leg.exchange_id, opp.net_apr)
-            try:
-                result = await open_position(opp, self.adapters, self.store, cfg)
-                opened.append((opp.symbol, opp.long_leg.exchange_id, opp.short_leg.exchange_id))
-                logger.info("  OK %s opened size=%.6f", opp.symbol,
-                            result.legs[opp.long_leg.exchange_id]["size"])
-            except Exception as e:
-                logger.error("  FAIL %s open: %s", opp.symbol, e)
-                raise
+            async with self._db_lock:  # serialize SQLite writes across concurrent opens
+                try:
+                    result = await open_position(opp, self.adapters, self.store, cfg)
+                    opened.append((opp.symbol, opp.long_leg.exchange_id, opp.short_leg.exchange_id))
+                    logger.info("  OK %s opened size=%.6f", opp.symbol,
+                                result.legs[opp.long_leg.exchange_id]["size"])
+                except Exception as e:
+                    logger.error("  FAIL %s open: %s", opp.symbol, e)
+                    raise
 
         results = await asyncio.gather(*[_open_one(opp) for opp in batch], return_exceptions=True)
         failures = [(batch[i], results[i]) for i in range(len(batch)) if isinstance(results[i], Exception)]
 
         if failures:
-            logger.error("%d positions failed to open; rolling back all opened", len(failures))
-            for sym, _long_ex, _short_ex in opened:
-                logger.warning("  Rolling back %s", sym)
-                try:
-                    await close_position(self.adapters, self.store,
-                                         ExecConfig(cross_pct=self.bot_config.cross_pct))
-                except Exception as e2:
-                    logger.error("  Rollback %s failed: %s", sym, e2)
+            logger.error("%d positions failed to open; rolling back %d opened", len(failures), len(opened))
+            # Rollback directly from exchange positions, NOT from DB
+            for sym, long_ex, short_ex in opened:
+                logger.warning("  Rolling back %s (%s/%s)", sym, long_ex, short_ex)
+                for ex_id, close_side in [(long_ex, "sell"), (short_ex, "buy")]:
+                    adapter = self.adapters.get(ex_id)
+                    if not adapter:
+                        continue
+                    try:
+                        positions = await adapter.get_open_positions()
+                        target = next((p for p in positions if p.symbol.upper() == sym.upper() and abs(p.size) > 1e-8), None)
+                        if not target:
+                            continue
+                        md = await adapter.get_market_details(sym)
+                        bba = await adapter.get_best_bid_ask(md.market_id)
+                        actual_side = "sell" if target.size > 0 else "buy"
+                        px = bba.bid if actual_side == "sell" else bba.ask
+                        await adapter.close_position(sym, actual_side, abs(target.size), px, md.market_id)
+                        logger.info("  Rolled back %s %s %.4f", ex_id, actual_side, abs(target.size))
+                    except Exception as e2:
+                        logger.error("  Rollback %s/%s failed: %s", sym, ex_id, e2)
             self.state = BotState.IDLE
             await self.store.kv_set("state", "IDLE")
             return
