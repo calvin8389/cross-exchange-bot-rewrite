@@ -18,6 +18,7 @@ from src.db.store import Event, Store
 from src.exchanges.base import ExchangeAdapter, MarketDetails
 
 logger = logging.getLogger(__name__)
+MIN_POSITION_SIZE = 1e-8
 
 
 class UnhedgedExposureError(RuntimeError):
@@ -112,7 +113,8 @@ async def open_position(
     if long_bal.available < required_long_margin or short_bal.available < required_short_margin:
         raise ValueError(
             f"Insufficient available balance for {opp.symbol}: "
-            f"required long={required_long_margin:.4f} short={required_short_margin:.4f}"
+            f"required long={required_long_margin:.4f} short={required_short_margin:.4f}; "
+            f"available long={long_bal.available:.4f} short={short_bal.available:.4f}"
         )
 
     _validate_leg_requirements(opp.symbol, opp.long_leg.exchange_id, size_base, long_notional, long_md)
@@ -324,11 +326,11 @@ async def open_position(
         short_adapter.get_open_positions(),
     )
     long_fill_entry = next(
-        (p.entry_price for p in long_positions if p.symbol.upper() == opp.symbol.upper() and abs(p.size) > 1e-8),
+        (p.entry_price for p in long_positions if p.symbol.upper() == opp.symbol.upper() and abs(p.size) > MIN_POSITION_SIZE),
         long_price,  # fallback to limit price
     )
     short_fill_entry = next(
-        (p.entry_price for p in short_positions if p.symbol.upper() == opp.symbol.upper() and abs(p.size) > 1e-8),
+        (p.entry_price for p in short_positions if p.symbol.upper() == opp.symbol.upper() and abs(p.size) > MIN_POSITION_SIZE),
         short_price,  # fallback to limit price
     )
 
@@ -479,8 +481,8 @@ async def close_position(
             long_adapter.get_open_positions(),
             short_adapter.get_open_positions(),
         )
-        long_still_open = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in long_positions)
-        short_still_open = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in short_positions)
+        long_still_open = any(p.symbol.upper() == symbol.upper() and abs(p.size) > MIN_POSITION_SIZE for p in long_positions)
+        short_still_open = any(p.symbol.upper() == symbol.upper() and abs(p.size) > MIN_POSITION_SIZE for p in short_positions)
 
         if not long_still_open and not short_still_open:
             closed = True
@@ -649,8 +651,8 @@ async def _confirm_positions(
             await asyncio.sleep(config.confirm_poll_interval)
             continue
 
-        long_match = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in long_pos)
-        short_match = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in short_pos)
+        long_match = any(p.symbol.upper() == symbol.upper() and abs(p.size) > MIN_POSITION_SIZE for p in long_pos)
+        short_match = any(p.symbol.upper() == symbol.upper() and abs(p.size) > MIN_POSITION_SIZE for p in short_pos)
 
         if long_match and short_match:
             return True
@@ -678,8 +680,8 @@ async def _confirm_flat(
             await asyncio.sleep(config.confirm_poll_interval)
             continue
 
-        match_a = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in pos_a)
-        match_b = any(p.symbol.upper() == symbol.upper() and abs(p.size) > 1e-8 for p in pos_b)
+        match_a = any(p.symbol.upper() == symbol.upper() and abs(p.size) > MIN_POSITION_SIZE for p in pos_a)
+        match_b = any(p.symbol.upper() == symbol.upper() and abs(p.size) > MIN_POSITION_SIZE for p in pos_b)
 
         if not match_a and not match_b:
             return True
@@ -825,7 +827,7 @@ async def _collect_residual_positions(
     residuals: list[dict[str, float | str]] = []
     for exchange_id, positions in exchange_positions.items():
         for pos in positions:
-            if pos.symbol.upper() != symbol.upper() or abs(pos.size) <= 1e-8:
+            if pos.symbol.upper() != symbol.upper() or abs(pos.size) <= MIN_POSITION_SIZE:
                 continue
             residuals.append(
                 {

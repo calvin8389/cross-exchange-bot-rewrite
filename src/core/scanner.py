@@ -26,6 +26,7 @@ class ScanConfig:
 
 def _estimate_cost_apr(config: ScanConfig) -> float:
     hold_hours = max(config.hold_duration_hours, 1.0)
+    # 4 = 2 legs (long + short) × 2 trades (open + close)
     round_trip_cost_pct = (
         (config.estimated_taker_fee_bps + config.estimated_slippage_bps + config.estimated_impact_bps)
         * 4

@@ -66,11 +66,20 @@ def _mock_adapter(name: str):
 
 
 class FakePosition:
-    def __init__(self, symbol="BTC", size=0.001, entry=50000.0, pnl=0.0):
+    def __init__(
+        self,
+        symbol="BTC",
+        size=0.001,
+        entry=50000.0,
+        pnl=0.0,
+        *,
+        entry_price=None,
+        unrealized_pnl=None,
+    ):
         self.symbol = symbol
         self.size = size
-        self.entry_price = entry
-        self.unrealized_pnl = pnl
+        self.entry_price = entry if entry_price is None else entry_price
+        self.unrealized_pnl = pnl if unrealized_pnl is None else unrealized_pnl
 
 
 def _make_opp() -> Opportunity:
