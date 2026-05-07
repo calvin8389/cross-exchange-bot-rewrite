@@ -1,0 +1,43 @@
+{
+  "_comment": "Cross-exchange bot configuration",
+  "symbols_to_monitor": [
+    "IP",
+    "TRUMP",
+    "OP",
+    "PENDLE",
+    "ARB",
+    "LIT",
+    "DOT",
+    "SUI",
+    "ENA",
+    "SOL"
+  ],
+  "quote": "USD",
+  "leverage": 3,
+  "hold_duration_hours": 8.0,
+  "wait_between_cycles_minutes": 5.0,
+  "check_interval_seconds": 60,
+  "min_net_apr_threshold": 10.0,
+  "min_volume_usd": 250000000,
+  "max_spread_pct": 0.2,
+  "cross_pct": 3.0,
+  "enable_stop_loss": true,
+  "max_concurrent_positions": 5,
+  "position_tiers": {
+    "large": 500.0,
+    "medium": 200.0,
+    "small": 100.0
+  },
+  "symbol_tiers": {
+    "SOL": "large",
+    "DOT": "medium",
+    "SUI": "medium",
+    "ARB": "medium",
+    "OP": "medium",
+    "IP": "small",
+    "TRUMP": "small",
+    "PENDLE": "small",
+    "ENA": "small",
+    "LIT": "small"
+  }
+}

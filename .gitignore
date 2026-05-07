@@ -2,7 +2,6 @@ __pycache__/
 *.pyc
 .venv/
 .env
-bot_config.json
 bot.sqlite3
 bot.sqlite3-shm
 bot.sqlite3-wal
